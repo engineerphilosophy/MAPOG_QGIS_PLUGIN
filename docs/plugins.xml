@@ -8,9 +8,9 @@
     <qgis_maximum_version>3.99</qgis_maximum_version>
     <homepage>https://mapog.com</homepage>
     <file_name>mapog.zip</file_name>
-    <icon>https://engineerphilosophy.github.io/MAPOG-QGIS-PLUGIN/icon.png</icon>
+    <icon>https://raw.githubusercontent.com/engineerphilosophy/MAPOG-QGIS-PLUGIN/main/docs/icon.png</icon>
     <author_name>MAPOG</author_name>
-    <download_url>https://engineerphilosophy.github.io/MAPOG-QGIS-PLUGIN/mapog.zip</download_url>
+    <download_url>https://raw.githubusercontent.com/engineerphilosophy/MAPOG-QGIS-PLUGIN/main/docs/mapog.zip</download_url>
     <uploaded_by>MAPOG</uploaded_by>
     <create_date>2026-06-10</create_date>
     <update_date>2026-06-10</update_date>
