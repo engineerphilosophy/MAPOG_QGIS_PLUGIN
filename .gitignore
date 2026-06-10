@@ -3,3 +3,6 @@ __pycache__/
 *.pyo
 .DS_Store
 *.zip
+
+# Published QGIS plugin repository download (served via GitHub Pages)
+!docs/mapog.zip

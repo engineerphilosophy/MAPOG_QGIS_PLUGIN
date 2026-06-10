@@ -16,7 +16,7 @@ a QThread worker is a clear next step — see README).
 import os
 
 from qgis.PyQt.QtCore import Qt, QTimer, pyqtSignal
-from qgis.PyQt.QtGui import QPalette, QColor
+from qgis.PyQt.QtGui import QPalette, QColor, QPixmap
 from qgis.PyQt.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
     QPushButton, QListWidget, QListWidgetItem, QStackedWidget, QTabWidget,
@@ -289,7 +289,7 @@ class MapogDockWidget(QgsDockWidget):
     # ---- UI construction ---------------------------------------------------
 
     def _build_brand_bar(self):
-        """White MAPOG header strip (icon + navy title) shown above every page."""
+        """White MAPOG header strip (wordmark logo + subtitle) shown above every page."""
         bar = QWidget()
         bar.setObjectName("brandBar")
         bar.setAttribute(Qt.WA_StyledBackground, True)
@@ -297,17 +297,26 @@ class MapogDockWidget(QgsDockWidget):
         row.setContentsMargins(16, 12, 16, 12)
         row.setSpacing(10)
 
-        icon = QLabel("🗺️")
-        icon.setObjectName("brandIcon")
-        row.addWidget(icon, 0, Qt.AlignVCenter)
-
         col = QVBoxLayout()
-        col.setSpacing(1)
-        title = QLabel("MAPOG")
-        title.setObjectName("brandTitle")
+        col.setSpacing(2)
+        logo = QLabel()
+        logo.setObjectName("brandLogo")
+        logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
+        pix = QPixmap(logo_path)
+        if not pix.isNull():
+            # Render at 2x and tag the device-pixel-ratio so the wordmark stays
+            # crisp on HiDPI/Retina while occupying ~26px of logical height.
+            target_h = 26
+            scaled = pix.scaledToHeight(target_h * 2, Qt.SmoothTransformation)
+            scaled.setDevicePixelRatio(2.0)
+            logo.setPixmap(scaled)
+        else:
+            # Fallback to text if the asset is missing for any reason.
+            logo.setText("MAPOG")
+            logo.setObjectName("brandTitle")
+        col.addWidget(logo)
         subtitle = QLabel("Cloud GIS for QGIS")
         subtitle.setObjectName("brandSubtitle")
-        col.addWidget(title)
         col.addWidget(subtitle)
         row.addLayout(col)
         row.addStretch(1)
