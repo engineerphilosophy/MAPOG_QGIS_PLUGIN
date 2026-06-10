@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
-  <pyqgis_plugin name="MAPOG" version="0.3.0">
+  <pyqgis_plugin name="MAPOG" version="0.4.0">
     <description>Connect QGIS to MAPOG (mapog.com) — browse maps and layers, load them into QGIS, and push edits back through the MAPOG external API.</description>
     <about>Official-style client for the MAPOG GIS platform. Log in with your MAPOG account (or paste an API key); the plugin provisions and stores an API key, then reads/writes layer data over the secure external API (API key + HMAC).</about>
-    <version>0.3.0</version>
+    <version>0.4.0</version>
     <qgis_minimum_version>3.22</qgis_minimum_version>
     <qgis_maximum_version>3.99</qgis_maximum_version>
     <homepage>https://mapog.com</homepage>

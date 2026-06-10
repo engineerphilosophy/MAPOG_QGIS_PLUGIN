@@ -1209,24 +1209,27 @@ class MapogDockWidget(QgsDockWidget):
             self._busy(False)
 
     def _apply_layer_style(self, upload_result, qgis_layer):
-        """Copy the QGIS layer's fill/stroke color onto the freshly uploaded
-        MAPOG layer(s), overriding MAPOG's default blue.
+        """Replicate the QGIS layer's symbology onto the freshly uploaded MAPOG
+        layer(s), overriding MAPOG's default blue.
+
+        Categorized layers carry their full per-value palette (style_type
+        "CATEGORY"); single-symbol layers carry a "Basic" fill/stroke.
 
         Best-effort: a style failure must not fail the upload itself, since the
         layer is already created server-side.
         """
-        style = layer_io.basic_style_from_layer(qgis_layer)
-        if not style:
+        style_type, style_attributes = layer_io.vector_style_from_layer(qgis_layer)
+        if not style_attributes:
             return
         for c in _extract_list(upload_result, "layers"):
             new_id = c.get("layerid") or c.get("id") or c.get("layer_id")
             if not new_id:
                 continue
             try:
-                self.client.update_layer_style(new_id, style)
+                self.client.update_layer_style(new_id, style_attributes, style_type=style_type)
             except MapogError as e:
                 self._info(f"Uploaded '{qgis_layer.name()}', but could not copy its "
-                           f"color: {e}", level=Qgis.Warning)
+                           f"style: {e}", level=Qgis.Warning)
 
     # ---- raster processing watcher -----------------------------------------
     # Raster upload returns immediately; the server then converts the file to a

@@ -300,6 +300,177 @@ def basic_style_from_layer(layer):
         return None
 
 
+def vector_style_from_layer(layer):
+    """Return (style_type, style_attributes) replicating the QGIS layer's
+    symbology for the MAPOG style API.
+
+    - A categorized renderer (per-value colors/sizes) -> ("CATEGORY", {...}),
+      preserving each category's matched value, color and (for points) marker
+      size, so MAPOG renders the same palette instead of one flat color.
+    - Anything else -> ("Basic", {...}) via basic_style_from_layer.
+
+    Returns (None, None) when no usable style can be read."""
+    try:
+        from qgis.core import QgsCategorizedSymbolRenderer
+        renderer = layer.renderer()
+    except Exception:
+        renderer = None
+
+    if isinstance(renderer, QgsCategorizedSymbolRenderer):
+        attrs = _category_style_from_renderer(layer, renderer)
+        if attrs and attrs.get("attribute_parts"):
+            return "CATEGORY", attrs
+
+    basic = basic_style_from_layer(layer)
+    return ("Basic", basic) if basic else (None, None)
+
+
+def _is_point_layer(layer):
+    try:
+        from qgis.core import QgsWkbTypes
+        return QgsWkbTypes.geometryType(layer.wkbType()) == QgsWkbTypes.PointGeometry
+    except Exception:
+        return False
+
+
+def _len_to_px(value, unit):
+    """Convert a QGIS render length (mm/pt/in/px) to screen pixels at 96 DPI."""
+    try:
+        from qgis.core import QgsUnitTypes
+        if unit == QgsUnitTypes.RenderPixels:
+            return value
+        if unit == QgsUnitTypes.RenderPoints:
+            return value * 96.0 / 72.0
+        if unit == QgsUnitTypes.RenderInches:
+            return value * 96.0
+        if unit == QgsUnitTypes.RenderMillimeters:
+            return value * 96.0 / 25.4
+    except Exception:
+        pass
+    return value * 96.0 / 25.4  # assume millimeters (QGIS default)
+
+
+def _marker_radius_px(symbol):
+    """Approximate a MAPOG point radius (px) from a QGIS marker symbol.
+    QGIS reports the marker *diameter* in its size unit; MAPOG's radius is half
+    of the on-screen diameter."""
+    try:
+        if not hasattr(symbol, "size"):
+            return 5
+        diameter_px = _len_to_px(float(symbol.size()), symbol.sizeUnit())
+        return max(1, int(round(diameter_px / 2.0)))
+    except Exception:
+        return 5
+
+
+def _marker_shape(symbol):
+    """Map a QGIS simple-marker shape to a MAPOG pointStyleType (best-effort)."""
+    try:
+        sl = symbol.symbolLayer(0)
+        if hasattr(sl, "shape"):
+            from qgis.core import QgsSimpleMarkerSymbolLayerBase as B
+            mapping = {
+                B.Circle: "circle", B.Square: "square", B.Diamond: "diamond",
+                B.Triangle: "triangle", B.Star: "star", B.Pentagon: "pentagon",
+            }
+            return mapping.get(sl.shape(), "circle")
+    except Exception:
+        pass
+    return "circle"
+
+
+def _symbol_stroke(symbol):
+    """Return (stroke_color hex or None, stroke_size px) for a symbol's outline."""
+    try:
+        sl = symbol.symbolLayer(0)
+        if sl is None:
+            return None, 1
+        color = None
+        if hasattr(sl, "strokeColor"):
+            c = sl.strokeColor()
+            if c is not None and c.isValid():
+                color = c.name()
+        size = 1
+        if hasattr(sl, "strokeWidth"):
+            w = float(sl.strokeWidth())
+            unit = sl.strokeWidthUnit() if hasattr(sl, "strokeWidthUnit") else None
+            size = max(0, int(round(_len_to_px(w, unit)))) if w > 0 else 0
+        return color, size
+    except Exception:
+        return None, 1
+
+
+def _category_style_from_renderer(layer, renderer):
+    """Build MAPOG CATEGORY style_attributes from a QgsCategorizedSymbolRenderer."""
+    is_point = _is_point_layer(layer)
+
+    parts = []
+    default_radius = 5
+    stroke_color = "#ffffff"
+    stroke_size = 1
+    point_shape = "circle"
+    captured_global = False
+
+    for cat in renderer.categories():
+        sym = cat.symbol()
+        if sym is None:
+            continue
+        color = sym.color().name()
+        radius = _marker_radius_px(sym) if is_point else None
+
+        # QGIS' "all other values" bucket has an empty/null match value -> map it
+        # to MAPOG's reserved default key.
+        val = cat.value()
+        if val is None or (isinstance(val, str) and val == ""):
+            values = ["__default__"]
+        elif isinstance(val, (list, tuple)):
+            # Multi-value category: one MAPOG part per matched value, same look.
+            values = [v for v in val]
+        else:
+            values = [val]
+
+        for v in values:
+            part = {"value": v, "color": color}
+            if radius is not None:
+                part["radius"] = radius
+            parts.append(part)
+
+        if not captured_global:
+            captured_global = True
+            sc, sw = _symbol_stroke(sym)
+            if sc:
+                stroke_color = sc
+            stroke_size = sw
+            if is_point:
+                point_shape = _marker_shape(sym)
+                if radius is not None:
+                    default_radius = radius
+
+    if not parts:
+        return None
+
+    # Guarantee a default bucket so unmatched rows still render (not invisible).
+    if not any(p["value"] == "__default__" for p in parts):
+        d = {"value": "__default__", "color": "#808080"}
+        if is_point:
+            d["radius"] = default_radius
+        parts.append(d)
+
+    attrs = {
+        "attribute_name": renderer.classAttribute(),
+        "attribute_parts": parts,
+        "opacity": round(float(layer.opacity()), 3) if layer.opacity() else 1,
+        "border_opacity": 1,
+        "stroke_size": stroke_size,
+        "stroke_color": stroke_color,
+        "overlap": True,
+    }
+    if is_point:
+        attrs["radius"] = default_radius
+        attrs["pointStyleType"] = point_shape
+    return attrs
+
+
 def add_layer_to_project(layer):
     QgsProject.instance().addMapLayer(layer)
     return layer
