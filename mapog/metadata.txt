@@ -1,0 +1,19 @@
+[general]
+name=MAPOG
+qgisMinimumVersion=3.22
+description=Connect QGIS to MAPOG (mapog.com) — browse maps and layers, load them into QGIS, and push edits back through the MAPOG external API.
+about=Official-style client for the MAPOG GIS platform. Log in with your MAPOG account (or paste an API key); the plugin provisions and stores an API key, then reads/writes layer data over the secure external API (API key + HMAC).
+version=0.3.0
+changelog=0.3.0 — Upload raster layers (QGIS → MAPOG): local files go up losslessly, tile/remote rasters render to GeoTIFF; a live progress bar tracks server-side processing until the tiled layer is ready.
+    0.2.0 — Two-direction menu (MAPOG → QGIS / QGIS → MAPOG); refreshed white/blue UI; raster layers load from dynamic tile URL and auto-zoom to footprint.
+    0.1.0 — Initial release.
+author=MAPOG
+email=support@mapog.com
+tracker=https://github.com/engineerphilosophy/MAPOG-QGIS-PLUGIN/issues
+repository=https://github.com/engineerphilosophy/MAPOG-QGIS-PLUGIN
+homepage=https://mapog.com
+tags=gis,mapog,rest,api,cloud,layers
+category=Web
+icon=icon.png
+experimental=False
+deprecated=False
