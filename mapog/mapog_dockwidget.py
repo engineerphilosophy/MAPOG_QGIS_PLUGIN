@@ -21,12 +21,12 @@ from qgis.PyQt.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
     QPushButton, QListWidget, QListWidgetItem, QStackedWidget, QTabWidget,
     QGroupBox, QComboBox, QCheckBox, QMessageBox, QApplication, QScrollArea,
-    QFrame, QProgressBar,
+    QFrame, QProgressBar, QInputDialog,
 )
-from qgis.core import Qgis, QgsProject, QgsVectorLayer, QgsRasterLayer
+from qgis.core import Qgis, QgsProject, QgsVectorLayer, QgsRasterLayer, QgsMessageLog
 from qgis.gui import QgsDockWidget
 
-from .mapog_client import MapogClient, MapogError, MapogAuthError, DEFAULT_BASE_URL
+from .mapog_client import MapogClient, MapogError, MapogAuthError, DEFAULT_BASE_URL, encode_id
 from . import settings_store
 from . import layer_io
 
@@ -242,6 +242,7 @@ class MapogDockWidget(QgsDockWidget):
         self.client = None
         self._maps = []
         self._layers = []
+        self._profile = {}  # signed-in user info shown in the Profile tab
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self._build_auth_page())     # index 0
@@ -344,6 +345,24 @@ class MapogDockWidget(QgsDockWidget):
         return bar
 
     def _build_auth_page(self):
+        """The not-connected area is its own little router so the user can move
+        between sign in, create account, password reset, and the shared OTP
+        step without leaving the panel.
+
+        auth_stack: 0=login, 1=signup, 2=forgot password, 3=verify OTP.
+        """
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        self.auth_stack = QStackedWidget()
+        v.addWidget(self.auth_stack)
+        self.auth_stack.addWidget(self._build_login_page())   # 0
+        self.auth_stack.addWidget(self._build_signup_page())  # 1
+        self.auth_stack.addWidget(self._build_forgot_page())  # 2
+        self.auth_stack.addWidget(self._build_otp_page())     # 3
+        return page
+
+    def _build_login_page(self):
         page = QWidget()
         outer = QVBoxLayout(page)
         outer.setContentsMargins(16, 16, 16, 16)
@@ -366,26 +385,48 @@ class MapogDockWidget(QgsDockWidget):
         # Restore any previously saved base URL, else keep the default.
         self._init_base_url_from_saved()
 
-        tabs = QTabWidget()
+        self.auth_tabs = QTabWidget()
 
         # --- Tab 1: email / password login ---
         login_tab = QWidget()
-        login_form = QFormLayout(login_tab)
-        login_form.setContentsMargins(12, 14, 12, 14)
+        login_col = QVBoxLayout(login_tab)
+        login_col.setContentsMargins(12, 14, 12, 14)
+        login_col.setSpacing(10)
+
+        login_form = QFormLayout()
         login_form.setSpacing(10)
         self.email_edit = QLineEdit()
         self.email_edit.setPlaceholderText("you@example.com")
         self.password_edit = QLineEdit()
         self.password_edit.setPlaceholderText("Your password")
         self.password_edit.setEchoMode(QLineEdit.Password)
+        self.password_edit.returnPressed.connect(self._on_login)
         login_form.addRow("Email", self.email_edit)
         login_form.addRow("Password", self.password_edit)
+        login_col.addLayout(login_form)
+
         self.login_btn = QPushButton("Log in")
         self.login_btn.setObjectName("primary")
         self.login_btn.setMinimumHeight(38)
         self.login_btn.clicked.connect(self._on_login)
-        login_form.addRow(self.login_btn)
-        tabs.addTab(login_tab, "Email login")
+        login_col.addWidget(self.login_btn)
+
+        # Forgot password (left) and Create account (right) as inline links.
+        links_row = QHBoxLayout()
+        forgot_link = QPushButton("Forgot password?")
+        forgot_link.setObjectName("link")
+        forgot_link.setCursor(Qt.PointingHandCursor)
+        forgot_link.clicked.connect(self._open_forgot)
+        links_row.addWidget(forgot_link)
+        links_row.addStretch(1)
+        signup_link = QPushButton("Create account")
+        signup_link.setObjectName("link")
+        signup_link.setCursor(Qt.PointingHandCursor)
+        signup_link.clicked.connect(self._open_signup)
+        links_row.addWidget(signup_link)
+        login_col.addLayout(links_row)
+        login_col.addStretch(1)
+        self.auth_tabs.addTab(login_tab, "Email login")
 
         # --- Tab 2: paste API key (Google/SSO users) ---
         key_tab = QWidget()
@@ -404,9 +445,113 @@ class MapogDockWidget(QgsDockWidget):
         self.key_btn.setMinimumHeight(38)
         self.key_btn.clicked.connect(self._on_connect_key)
         key_form.addRow(self.key_btn)
-        tabs.addTab(key_tab, "Paste API key")
+        self.auth_tabs.addTab(key_tab, "Paste API key")
 
-        outer.addWidget(tabs)
+        outer.addWidget(self.auth_tabs)
+        outer.addStretch(1)
+        return page
+
+    def _build_signup_page(self):
+        """Step 1 of sign up: collect name + email, request a verification OTP."""
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(10)
+        outer.addLayout(self._header("Create your account", on_back=self._show_login))
+        outer.addWidget(self._banner(
+            "Sign up with your email — we'll send a verification code so you can "
+            "set your password."))
+
+        box = QGroupBox("Account")
+        form = QFormLayout(box)
+        form.setSpacing(10)
+        self.su_name_edit = QLineEdit()
+        self.su_name_edit.setPlaceholderText("Jane Doe")
+        self.su_email_edit = QLineEdit()
+        self.su_email_edit.setPlaceholderText("you@example.com")
+        form.addRow("Name", self.su_name_edit)
+        form.addRow("Email", self.su_email_edit)
+        outer.addWidget(box)
+
+        self.su_btn = QPushButton("Send verification code")
+        self.su_btn.setObjectName("primary")
+        self.su_btn.setMinimumHeight(38)
+        self.su_btn.clicked.connect(self._on_signup)
+        outer.addWidget(self.su_btn)
+        outer.addStretch(1)
+        return page
+
+    def _build_forgot_page(self):
+        """Step 1 of password reset: collect the account email, request an OTP."""
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(10)
+        outer.addLayout(self._header("Reset your password", on_back=self._show_login))
+        outer.addWidget(self._banner(
+            "Enter your account email and we'll send a code to set a new password."))
+
+        box = QGroupBox("Account email")
+        form = QFormLayout(box)
+        form.setSpacing(10)
+        self.fp_email_edit = QLineEdit()
+        self.fp_email_edit.setPlaceholderText("you@example.com")
+        form.addRow("Email", self.fp_email_edit)
+        outer.addWidget(box)
+
+        self.fp_btn = QPushButton("Send reset code")
+        self.fp_btn.setObjectName("primary")
+        self.fp_btn.setMinimumHeight(38)
+        self.fp_btn.clicked.connect(self._on_forgot)
+        outer.addWidget(self.fp_btn)
+        outer.addStretch(1)
+        return page
+
+    def _build_otp_page(self):
+        """Shared step 2 for sign up and password reset: enter the emailed OTP
+        and choose a password. The backend's /verify/ endpoint sets the password
+        and logs in (returns a JWT) for both flows."""
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(10)
+        outer.addLayout(self._header("Enter verification code", on_back=self._show_login))
+        self.otp_hint = QLabel("")
+        self.otp_hint.setObjectName("hint")
+        self.otp_hint.setWordWrap(True)
+        outer.addWidget(self.otp_hint)
+
+        box = QGroupBox("Verification")
+        form = QFormLayout(box)
+        form.setSpacing(10)
+        self.otp_code_edit = QLineEdit()
+        self.otp_code_edit.setPlaceholderText("6-digit code")
+        self.otp_pass_edit = QLineEdit()
+        self.otp_pass_edit.setPlaceholderText("At least 6 characters")
+        self.otp_pass_edit.setEchoMode(QLineEdit.Password)
+        self.otp_pass2_edit = QLineEdit()
+        self.otp_pass2_edit.setPlaceholderText("Re-enter password")
+        self.otp_pass2_edit.setEchoMode(QLineEdit.Password)
+        self.otp_pass2_edit.returnPressed.connect(self._on_verify_otp)
+        form.addRow("Code", self.otp_code_edit)
+        form.addRow("New password", self.otp_pass_edit)
+        form.addRow("Confirm", self.otp_pass2_edit)
+        outer.addWidget(box)
+
+        self.otp_btn = QPushButton("Verify & connect")
+        self.otp_btn.setObjectName("primary")
+        self.otp_btn.setMinimumHeight(38)
+        self.otp_btn.clicked.connect(self._on_verify_otp)
+        outer.addWidget(self.otp_btn)
+
+        resend_row = QHBoxLayout()
+        resend_row.addStretch(1)
+        self.otp_resend_btn = QPushButton("Resend code")
+        self.otp_resend_btn.setObjectName("link")
+        self.otp_resend_btn.setCursor(Qt.PointingHandCursor)
+        self.otp_resend_btn.clicked.connect(self._on_resend_otp)
+        resend_row.addWidget(self.otp_resend_btn)
+        outer.addLayout(resend_row)
         outer.addStretch(1)
         return page
 
@@ -475,6 +620,24 @@ class MapogDockWidget(QgsDockWidget):
         cap.setObjectName("sectionLabel")
         box.addWidget(cap)
         box.addWidget(widget)
+        return box
+
+    def _target_map_field(self, combo, on_create, label_text="Target map"):
+        """A 'Target map' field: caption + a row with the map combo and a
+        '+ New map' button so users can create a map without leaving the page."""
+        box = QVBoxLayout()
+        box.setSpacing(4)
+        cap = QLabel(label_text)
+        cap.setObjectName("sectionLabel")
+        box.addWidget(cap)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(combo, 1)
+        new_btn = QPushButton("+ New map")
+        new_btn.setCursor(Qt.PointingHandCursor)
+        new_btn.clicked.connect(on_create)
+        row.addWidget(new_btn)
+        box.addLayout(row)
         return box
 
     @staticmethod
@@ -582,7 +745,10 @@ class MapogDockWidget(QgsDockWidget):
         et.addStretch(1)
         self.menu_tabs.addTab(export_tab, "QGIS → MAPOG")
 
-        # --- Tab 3: About (plugin identity, version, links) ---
+        # --- Tab 3: Profile (signed-in account) ---
+        self.menu_tabs.addTab(self._build_profile_tab(), "Profile")
+
+        # --- Tab 4: About (plugin identity, version, links) ---
         self.menu_tabs.addTab(self._build_about_tab(), "About")
 
         # --- Tab 4: Help (getting started + support links) ---
@@ -637,6 +803,144 @@ class MapogDockWidget(QgsDockWidget):
         btn.setCursor(Qt.PointingHandCursor)
         btn.clicked.connect(lambda: self._open_url(url))
         return btn
+
+    # ---- shareable links (map deep link + raster XYZ tile link) ------------
+
+    def _web_app_url(self):
+        """The MAPOG web app origin, derived from the API base URL by dropping a
+        trailing '/api' (e.g. https://story.mapog.com/api -> https://story.mapog.com).
+        NOTE: in local dev the API host (e.g. :8000) may differ from the web app
+        (:8100); production is correct. Falls back to the prod web origin."""
+        base = (self.base_url_edit.text().strip() or DEFAULT_BASE_URL).rstrip("/")
+        if base.endswith("/api"):
+            base = base[:-len("/api")]
+        return base or "https://story.mapog.com"
+
+    def _map_share_url(self, map_id):
+        """Deep link that opens this map in the MAPOG web app. The map id is sent
+        base64-encoded (encode_id is idempotent, so already-encoded ids pass
+        through). Viewable by others only if the map is set Public in MAPOG."""
+        return f"{self._web_app_url()}/maps/{encode_id(map_id)}"
+
+    def _pricing_url(self):
+        """MAPOG pricing/subscription page (tracks the configured server, e.g.
+        https://teststory.mapog.com/pricing)."""
+        return f"{self._web_app_url()}/pricing"
+
+    def _show_payment_required(self, message):
+        """Surface a 402 (subscription required) with a button that opens the
+        MAPOG pricing page in the browser."""
+        url = self._pricing_url()
+        try:
+            bar = self.iface.messageBar()
+            # Drop the transient "Exporting…/loading…" infos so the payment
+            # notice isn't stacked behind a now-misleading "loading" message.
+            bar.clearWidgets()
+            item = bar.createMessage("MAPOG", message)
+            btn = QPushButton("View plans")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda: self._open_url(url))
+            item.layout().addWidget(btn)
+            bar.pushWidget(item, Qgis.Warning, 12)
+        except Exception:
+            # Fall back to a plain message with the URL inline.
+            self._info(f"{message} Subscribe at {url}", level=Qgis.Warning)
+
+    def _copy_to_clipboard(self, text):
+        QApplication.clipboard().setText(text or "")
+        self._info("Link copied to clipboard.", level=Qgis.Info)
+
+    def _link_row(self, label_text, url):
+        """A field showing a copyable, read-only URL with Copy + Open buttons."""
+        box = QVBoxLayout()
+        box.setSpacing(4)
+        cap = QLabel(label_text)
+        cap.setObjectName("sectionLabel")
+        box.addWidget(cap)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        field = QLineEdit(url)
+        field.setReadOnly(True)
+        field.setCursorPosition(0)
+        row.addWidget(field, 1)
+        copy_btn = QPushButton("Copy")
+        copy_btn.setCursor(Qt.PointingHandCursor)
+        copy_btn.clicked.connect(lambda: self._copy_to_clipboard(url))
+        row.addWidget(copy_btn)
+        open_btn = QPushButton("Open")
+        open_btn.setObjectName("primary")
+        open_btn.setCursor(Qt.PointingHandCursor)
+        open_btn.clicked.connect(lambda: self._open_url(url))
+        row.addWidget(open_btn)
+        box.addLayout(row)
+        return box
+
+    def _build_links_box(self, title="Share & links"):
+        """A collapsible-feeling group that holds the per-map/per-layer links.
+        Hidden until populated. Rows are rebuilt by _populate_links_box()."""
+        box = QGroupBox(title)
+        v = QVBoxLayout(box)
+        v.setSpacing(8)
+        box.setVisible(False)
+        return box
+
+    def _populate_links_box(self, box, map_id, raster_tile_url=None,
+                            extra_tile_rows=None):
+        """(Re)fill a links box: always the map deep link; a raster XYZ tile row
+        when a tile_url is available; otherwise a note that WMS/WFS and vector
+        tile links aren't offered. `extra_tile_rows` is an optional list of
+        (label, url) for multiple completed rasters."""
+        layout = box.layout()
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+            else:
+                self._clear_layout(item.layout())
+
+        if map_id is not None:
+            layout.addLayout(self._link_row(
+                "Open in MAPOG (map link)", self._map_share_url(map_id)))
+            hint = QLabel("Anyone can open the map link only if the map is set to "
+                          "Public in MAPOG.")
+            hint.setObjectName("hint")
+            hint.setWordWrap(True)
+            layout.addWidget(hint)
+
+        tile_rows = list(extra_tile_rows or [])
+        if raster_tile_url:
+            tile_rows.append(("Raster tile URL (XYZ)", raster_tile_url))
+        for label, url in tile_rows:
+            layout.addLayout(self._link_row(label, url))
+
+        if not tile_rows:
+            note = QLabel("No tile/WMS/WFS service link: MAPOG has no OGC "
+                          "(WMS/WFS) service, and vector layers don't expose a "
+                          "tile URL. Raster layers show an XYZ tile link here.")
+            note.setObjectName("hint")
+            note.setWordWrap(True)
+            layout.addWidget(note)
+
+        box.setVisible(True)
+
+    @staticmethod
+    def _clear_layout(layout):
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+            else:
+                MapogDockWidget._clear_layout(item.layout())
+
+    @staticmethod
+    def _raster_tile_url(lyr):
+        """Pull the XYZ tile_url from a layer dict's raster_info, or None."""
+        info = (lyr or {}).get("raster_info") or {}
+        return info.get("tile_url")
 
     @staticmethod
     def _feature_row(emoji, text):
@@ -759,6 +1063,66 @@ class MapogDockWidget(QgsDockWidget):
         v.addStretch(1)
         return tab
 
+    def _build_profile_tab(self):
+        """The signed-in account: a hero (username) plus username and email.
+        Values are filled in by _refresh_profile_tab() on connect."""
+        tab = QWidget()
+        v = QVBoxLayout(tab)
+        v.setContentsMargins(14, 16, 14, 14)
+        v.setSpacing(14)
+
+        # --- Hero: avatar + username ---
+        hero = QFrame()
+        hero.setObjectName("aboutHero")
+        hero.setAttribute(Qt.WA_StyledBackground, True)
+        hv = QVBoxLayout(hero)
+        hv.setContentsMargins(16, 18, 16, 18)
+        hv.setSpacing(6)
+        avatar = QLabel("👤")
+        avatar.setObjectName("cardIcon")
+        avatar.setAlignment(Qt.AlignHCenter)
+        hv.addWidget(avatar)
+        self.pf_name = QLabel("—")
+        self.pf_name.setObjectName("aboutTitle")
+        self.pf_name.setAlignment(Qt.AlignHCenter)
+        self.pf_name.setWordWrap(True)
+        hv.addWidget(self.pf_name)
+        v.addWidget(hero)
+
+        # --- The three fields ---
+        details = QGroupBox("Profile")
+        df = QFormLayout(details)
+        df.setSpacing(8)
+        self.pf_username = self._selectable_value("—")
+        self.pf_email = self._selectable_value("—")
+        df.addRow("Username", self.pf_username)
+        df.addRow("Email", self.pf_email)
+        v.addWidget(details)
+
+        v.addStretch(1)
+        return tab
+
+    @staticmethod
+    def _selectable_value(text):
+        """A value QLabel the user can select/copy (e.g. their email)."""
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        return lbl
+
+    def _refresh_profile_tab(self):
+        """Fill the Profile tab from the captured/persisted profile. Safe to call
+        before the tab is built (no-op then)."""
+        if getattr(self, "pf_name", None) is None:
+            return
+        prof = self._profile or {}
+        QgsMessageLog.logMessage(
+            f"[profile] refresh with: {prof!r}", "MAPOG", Qgis.Info)
+        username = str(prof.get("uname") or "—")
+        self.pf_name.setText(username if username != "—" else "MAPOG user")
+        self.pf_username.setText(username)
+        self.pf_email.setText(str(prof.get("email") or "—"))
+
     def _build_existing_page(self):
         """Browse a map's existing layers and load one into QGIS."""
         page = QWidget()
@@ -821,6 +1185,7 @@ class MapogDockWidget(QgsDockWidget):
             2, "Pick a layer", badge_attr="step2_badge",
             title_attr="step2_title", pending=True))
         self.layers_list = self._scroll_list(160, 260)
+        self.layers_list.itemSelectionChanged.connect(self._refresh_existing_links)
         layers_layout.addWidget(self.layers_list)
 
         opts = QHBoxLayout()
@@ -839,6 +1204,11 @@ class MapogDockWidget(QgsDockWidget):
         self.load_btn.clicked.connect(self._on_load_layer)
         layers_layout.addWidget(self.load_btn)
         layout.addWidget(layers_panel)
+
+        # Links for the selected map (and the selected raster layer's tile URL).
+        self.ex_links_box = self._build_links_box("Share & links")
+        layout.addWidget(self.ex_links_box)
+
         layout.addStretch(1)
         return page
 
@@ -863,7 +1233,8 @@ class MapogDockWidget(QgsDockWidget):
 
         # Target map (where the layer will be added).
         self.gd_map_combo = QComboBox()
-        layout.addLayout(self._field("Target map", self.gd_map_combo))
+        layout.addLayout(self._target_map_field(
+            self.gd_map_combo, self._on_create_gis_map))
 
         # Country — auto-loaded when the page opens (see _open_gis).
         self.gd_country_combo = QComboBox()
@@ -881,6 +1252,11 @@ class MapogDockWidget(QgsDockWidget):
         self.gd_add_btn.setMinimumHeight(38)
         self.gd_add_btn.clicked.connect(self._on_add_gisdata_layer)
         layout.addWidget(self.gd_add_btn)
+
+        # Shown after a successful add: the target map's deep link.
+        self.gd_links_box = self._build_links_box("Share & links")
+        layout.addWidget(self.gd_links_box)
+
         layout.addStretch(1)
         return page
 
@@ -905,11 +1281,9 @@ class MapogDockWidget(QgsDockWidget):
             "Both become new layers in the target map."))
 
         # Target map (where the new layer will be created).
-        map_row = QHBoxLayout()
-        map_row.addWidget(QLabel("Target map"))
         self.up_map_combo = QComboBox()
-        map_row.addWidget(self.up_map_combo, 1)
-        layout.addLayout(map_row)
+        layout.addLayout(self._target_map_field(
+            self.up_map_combo, self._on_create_upload_map))
 
         # QGIS vector layers to upload (tick one or more).
         sel_row = QHBoxLayout()
@@ -932,6 +1306,12 @@ class MapogDockWidget(QgsDockWidget):
         self.up_btn.setMinimumHeight(38)
         self.up_btn.clicked.connect(self._on_upload_layer)
         layout.addWidget(self.up_btn)
+
+        # Shown after a successful upload: the map deep link + any raster XYZ
+        # tile links (rasters' tile_url is filled in by the processing watcher).
+        self.up_links_box = self._build_links_box("Share & links")
+        layout.addWidget(self.up_links_box)
+
         layout.addStretch(1)
         return page
 
@@ -956,6 +1336,7 @@ class MapogDockWidget(QgsDockWidget):
 
     def _open_gis(self):
         self.browse_stack.setCurrentIndex(2)
+        self.gd_links_box.setVisible(False)  # no add yet on a fresh landing
         self._load_maps_into_combo()
         # Load countries automatically on first landing; picking the first
         # country also populates its admin/OSM layers.
@@ -975,6 +1356,7 @@ class MapogDockWidget(QgsDockWidget):
             try:
                 self._busy(True)
                 self.client.verify_keys()
+                self._profile = settings_store.load_profile()
                 self._enter_browse_state()
                 return
             except MapogError:
@@ -996,6 +1378,11 @@ class MapogDockWidget(QgsDockWidget):
             self._busy(True)
             pk, sk = self.client.login_and_bootstrap(email, password)
             settings_store.save_config(base_url, pk, sk)
+            self._profile = self.client.profile or {}
+            QgsMessageLog.logMessage(
+                f"[profile] login captured: {self.client.profile!r}",
+                "MAPOG", Qgis.Info)
+            settings_store.save_profile(self._profile)
             self.password_edit.clear()
             self._enter_browse_state()
         except MapogAuthError as e:
@@ -1017,6 +1404,8 @@ class MapogDockWidget(QgsDockWidget):
             self._busy(True)
             self.client.verify_keys()
             settings_store.save_config(base_url, pk, sk)
+            # Key-only connect has no login response; show any persisted profile.
+            self._profile = settings_store.load_profile()
             self.sk_edit.clear()
             self._enter_browse_state()
         except MapogError as e:
@@ -1024,10 +1413,134 @@ class MapogDockWidget(QgsDockWidget):
         finally:
             self._busy(False)
 
+    # ---- sign up / password reset -----------------------------------------
+
+    def _show_login(self):
+        self.auth_stack.setCurrentIndex(0)
+
+    def _open_signup(self):
+        self.su_name_edit.clear()
+        self.su_email_edit.clear()
+        self.auth_stack.setCurrentIndex(1)
+
+    def _open_forgot(self):
+        self.fp_email_edit.clear()
+        self.auth_stack.setCurrentIndex(2)
+
+    def _open_otp(self, email, mode):
+        """Show the shared OTP step. `mode` ('signup' | 'reset') only tunes the
+        wording — both call the same /verify/ endpoint."""
+        self._pending_email = email
+        self._otp_mode = mode
+        self.otp_code_edit.clear()
+        self.otp_pass_edit.clear()
+        self.otp_pass2_edit.clear()
+        if mode == "signup":
+            self.otp_hint.setText(
+                f"We sent a 6-digit code to {email}. Enter it and choose a "
+                "password to finish creating your account.")
+        else:
+            self.otp_hint.setText(
+                f"We sent a 6-digit code to {email}. Enter it and choose a new "
+                "password.")
+        self.auth_stack.setCurrentIndex(3)
+
+    def _on_signup(self):
+        name = self.su_name_edit.text().strip()
+        email = self.su_email_edit.text().strip()
+        if not email:
+            self._info("Enter your email to sign up.", level=Qgis.Warning)
+            return
+        base_url = self.base_url_edit.text().strip() or DEFAULT_BASE_URL
+        self.client = MapogClient(base_url)
+        try:
+            self._busy(True)
+            self.client.signup(email, uname=name)
+            self._open_otp(email, mode="signup")
+            self._info("Verification code sent — check your email.", level=Qgis.Success)
+        except MapogError as e:
+            # Most common case: "Email already exists" — surface the server text.
+            self._info(f"Could not sign up: {e}", level=Qgis.Critical)
+        finally:
+            self._busy(False)
+
+    def _on_forgot(self):
+        email = self.fp_email_edit.text().strip()
+        if not email:
+            self._info("Enter your account email.", level=Qgis.Warning)
+            return
+        base_url = self.base_url_edit.text().strip() or DEFAULT_BASE_URL
+        self.client = MapogClient(base_url)
+        try:
+            self._busy(True)
+            self.client.request_password_reset(email)
+            self._open_otp(email, mode="reset")
+            self._info("Reset code sent — check your email.", level=Qgis.Success)
+        except MapogError as e:
+            self._info(f"Could not start password reset: {e}", level=Qgis.Critical)
+        finally:
+            self._busy(False)
+
+    def _on_resend_otp(self):
+        """Re-send the OTP. forget-password regenerates and mails the code for
+        any existing user, so it works for both an in-progress signup (the user
+        row already exists) and a password reset."""
+        email = getattr(self, "_pending_email", "")
+        if not email or not self.client:
+            return
+        try:
+            self._busy(True)
+            self.client.request_password_reset(email)
+            self._info("A new code has been sent to your email.", level=Qgis.Success)
+        except MapogError as e:
+            self._info(f"Could not resend the code: {e}", level=Qgis.Critical)
+        finally:
+            self._busy(False)
+
+    def _on_verify_otp(self):
+        email = getattr(self, "_pending_email", "")
+        otp = self.otp_code_edit.text().strip()
+        pwd = self.otp_pass_edit.text()
+        pwd2 = self.otp_pass2_edit.text()
+        if not email or not self.client:
+            self._info("Start sign up or password reset first.", level=Qgis.Warning)
+            return
+        if not otp:
+            self._info("Enter the verification code from your email.", level=Qgis.Warning)
+            return
+        if len(pwd) < 6:
+            self._info("Password must be at least 6 characters.", level=Qgis.Warning)
+            return
+        if pwd != pwd2:
+            self._info("Passwords don't match.", level=Qgis.Warning)
+            return
+        base_url = self.base_url_edit.text().strip() or DEFAULT_BASE_URL
+        try:
+            self._busy(True)
+            # verify -> JWT -> provision/reuse the 'QGIS Plugin' key pair.
+            pk, sk = self.client.verify_and_bootstrap(email, otp, pwd)
+            settings_store.save_config(base_url, pk, sk)
+            self._profile = self.client.profile or {}
+            QgsMessageLog.logMessage(
+                f"[profile] verify captured: {self.client.profile!r}",
+                "MAPOG", Qgis.Info)
+            settings_store.save_profile(self._profile)
+            self.otp_pass_edit.clear()
+            self.otp_pass2_edit.clear()
+            self._enter_browse_state()
+            self._info("You're connected to MAPOG.", level=Qgis.Success)
+        except MapogAuthError as e:
+            self._info(f"Verification failed: {e}", level=Qgis.Critical)
+        except MapogError as e:
+            self._info(f"Could not connect: {e}", level=Qgis.Critical)
+        finally:
+            self._busy(False)
+
     def _on_logout(self):
         self._stop_raster_watch()  # don't keep polling once signed out
         settings_store.clear_config()
         self.client = None
+        self._profile = {}
         self.maps_search.clear()
         self.maps_list.clear()
         self.layers_list.clear()
@@ -1036,10 +1549,16 @@ class MapogDockWidget(QgsDockWidget):
         self.gd_map_combo.clear()
         self.up_map_combo.clear()
         self.up_layer_list.clear()
+        self._ex_map_id = None
+        self.ex_links_box.setVisible(False)
+        self.up_links_box.setVisible(False)
+        self.gd_links_box.setVisible(False)
         self._show_menu()
+        self._show_login()
         self.stack.setCurrentIndex(0)
 
     def _enter_browse_state(self):
+        self._refresh_profile_tab()
         self.stack.setCurrentIndex(1)
         self._show_menu()  # show the two-choice menu; pages load maps on open
 
@@ -1066,6 +1585,9 @@ class MapogDockWidget(QgsDockWidget):
             # and drop any layers from a previously selected map.
             self.layers_list.clear()
             self._set_step2_active(False)
+            # No map selected → hide its links until one is picked again.
+            self._ex_map_id = None
+            self.ex_links_box.setVisible(False)
             for m in maps:
                 item = QListWidgetItem(str(self._map_title(m)))
                 item.setData(Qt.UserRole, m)
@@ -1104,14 +1626,67 @@ class MapogDockWidget(QgsDockWidget):
         finally:
             self._busy(False)
 
+    # ---- create map (inline) ----------------------------------------------
+
+    def _prompt_and_create_map(self):
+        """Ask for a name and create a new MAPOG map. Returns the created map
+        dict (with id) on success, else None."""
+        if not self.client:
+            self._info("Not connected.", level=Qgis.Warning)
+            return None
+        name, ok = QInputDialog.getText(self, "Create map", "Map name:")
+        if not ok:
+            return None
+        name = name.strip()
+        if not name:
+            self._info("Enter a map name.", level=Qgis.Warning)
+            return None
+        try:
+            self._busy(True)
+            created = self.client.create_map(name)
+            self._info(f"Created map '{name}'.", level=Qgis.Success)
+            return created if isinstance(created, dict) else None
+        except MapogError as e:
+            self._info(f"Could not create map: {e}", level=Qgis.Critical)
+            return None
+        finally:
+            self._busy(False)
+
+    @staticmethod
+    def _select_combo_map(combo, created):
+        """Select the newly created map in a target-map combo by its id."""
+        map_id = (created or {}).get("id") or (created or {}).get("mapid") \
+            or (created or {}).get("map_id")
+        if map_id is None:
+            return
+        for i in range(combo.count()):
+            if combo.itemData(i) == map_id:
+                combo.setCurrentIndex(i)
+                return
+
+    def _on_create_gis_map(self):
+        created = self._prompt_and_create_map()
+        if created:
+            self._load_maps_into_combo()
+            self._select_combo_map(self.gd_map_combo, created)
+
+    def _on_create_upload_map(self):
+        created = self._prompt_and_create_map()
+        if created:
+            self._load_maps_into_upload_combo()
+            self._select_combo_map(self.up_map_combo, created)
+
     def _on_map_selected(self):
         item = self.maps_list.currentItem()
         if not item or not self.client:
             return
         m = item.data(Qt.UserRole)
         map_id = m.get("id") or m.get("mapid") or m.get("map_id")
+        self._ex_map_id = map_id
         # Step 1 is done — light up step 2 ("Pick a layer").
         self._set_step2_active(True)
+        # Show the map's deep link now; a raster selection adds its tile link.
+        self._populate_links_box(self.ex_links_box, map_id)
         try:
             self._busy(True)
             data = self.client.list_layers(map_id)
@@ -1137,6 +1712,20 @@ class MapogDockWidget(QgsDockWidget):
     @staticmethod
     def _is_raster(lyr):
         return lyr.get("layer_type") == "RASTER" or "raster_info" in lyr
+
+    def _refresh_existing_links(self):
+        """Update the existing-page links box for the current map + selected
+        layer (raster layers add their XYZ tile URL; vector layers don't)."""
+        map_id = getattr(self, "_ex_map_id", None)
+        if map_id is None:
+            return
+        tile_url = None
+        item = self.layers_list.currentItem()
+        if item:
+            lyr = item.data(Qt.UserRole)
+            if self._is_raster(lyr):
+                tile_url = self._raster_tile_url(lyr)
+        self._populate_links_box(self.ex_links_box, map_id, raster_tile_url=tile_url)
 
     def _on_load_layer(self):
         item = self.layers_list.currentItem()
@@ -1213,12 +1802,17 @@ class MapogDockWidget(QgsDockWidget):
             self._info(str(e), level=Qgis.Critical)
         return False
 
-    def _load_layer_into_qgis(self, layer_id, name, fmt="geojson"):
+    def _load_layer_into_qgis(self, layer_id, name, fmt="geojson",
+                              announce_payment=True):
         """Export a layer (by base64 layerid) and render it on the QGIS canvas.
 
         Shared by the Layers-list Load button and the GIS Data auto-load. Caller
         is responsible for the busy cursor. Surfaces gating/errors via messages
-        and returns True on success, False otherwise.
+        and returns a status: "ok", "payment" (402), or "error".
+
+        Set announce_payment=False to suppress the per-layer 402 message so the
+        caller can show one combined message (used by the GIS Data add, where the
+        layer IS added to the map even though loading into QGIS is gated).
         """
         try:
             # Export returns a presigned S3 .zip URL; download + unzip + load.
@@ -1227,12 +1821,14 @@ class MapogDockWidget(QgsDockWidget):
             qgs_layer = layer_io.zip_bytes_to_layer(zip_bytes, name)
             layer_io.add_layer_to_project(qgs_layer)
             self._info(f"Loaded '{name}' into QGIS.", level=Qgis.Success)
-            return True
+            return "ok"
         except MapogError as e:
             # 402 = subscription required; 429 = GISDATA download cooldown.
             if e.http_code == 402:
-                self._info("Exporting this layer requires an active MAPOG subscription.",
-                           level=Qgis.Warning)
+                if announce_payment:
+                    self._show_payment_required(
+                        "Exporting this layer requires an active MAPOG subscription.")
+                return "payment"
             elif e.http_code == 429:
                 # Server message already reads "Please wait X before downloading again".
                 self._info(str(e), level=Qgis.Warning)
@@ -1240,7 +1836,7 @@ class MapogDockWidget(QgsDockWidget):
                 self._info(f"Failed to load layer: {e}", level=Qgis.Critical)
         except ValueError as e:
             self._info(str(e), level=Qgis.Critical)
-        return False
+        return "error"
 
     # ---- Upload (QGIS -> MAPOG) --------------------------------------------
 
@@ -1248,6 +1844,9 @@ class MapogDockWidget(QgsDockWidget):
         """Populate the target-map combo (from MAPOG) and the QGIS-layer combo."""
         self._load_maps_into_upload_combo()
         self._refresh_project_layers()
+        # Hide stale links from a previous upload until a new one succeeds.
+        if getattr(self, "up_links_box", None) is not None:
+            self.up_links_box.setVisible(False)
 
     def _load_maps_into_upload_combo(self):
         if not self.client:
@@ -1357,8 +1956,8 @@ class MapogDockWidget(QgsDockWidget):
                     # 402 = subscription required; gating won't change for the rest,
                     # so surface it once and stop.
                     if e.http_code == 402:
-                        self._info("Uploading layers requires an active MAPOG subscription.",
-                                   level=Qgis.Warning)
+                        self._show_payment_required(
+                            "Uploading layers requires an active MAPOG subscription.")
                         failed.append(name)
                         break
                     self._info(f"Failed to upload '{name}': {e}", level=Qgis.Critical)
@@ -1384,6 +1983,10 @@ class MapogDockWidget(QgsDockWidget):
                     f"Uploaded {len(uploaded)} layer(s); {len(failed)} failed." + raster_note,
                     level=Qgis.Warning,
                 )
+            # Surface share/links for the target map once anything uploaded.
+            # Raster tile URLs are added later by the processing watcher.
+            if uploaded:
+                self._populate_links_box(self.up_links_box, map_id)
             # Show a persistent loader until server-side raster processing ends.
             if pending_rasters:
                 self._start_raster_watch(map_id, pending_rasters)
@@ -1444,6 +2047,7 @@ class MapogDockWidget(QgsDockWidget):
             "pending": list(rasters),
             "done": [],
             "failed": [],
+            "tile_links": [],  # (label, xyz_tile_url) for each completed raster
             "item": item,
             "progress": progress,
             "ticks": 0,
@@ -1485,6 +2089,10 @@ class MapogDockWidget(QgsDockWidget):
                 status = (info or {}).get("processing_status")
                 if status == "completed":
                     w["done"].append(r["name"])
+                    tile = (info or {}).get("tile_url")
+                    if tile:
+                        w["tile_links"].append(
+                            (f"Raster tile URL (XYZ) — {r['name']}", tile))
                 elif status == "failed":
                     w["failed"].append((r["name"], (info or {}).get("processing_error")))
                 else:
@@ -1523,7 +2131,13 @@ class MapogDockWidget(QgsDockWidget):
         if not w:
             return
         done, failed = list(w["done"]), list(w["failed"])
+        map_id, tile_links = w["map_id"], list(w["tile_links"])
         self._stop_raster_watch()
+        # Add the completed rasters' XYZ tile links to the upload page's box
+        # (alongside the map deep link populated right after upload).
+        if tile_links and getattr(self, "up_links_box", None) is not None:
+            self._populate_links_box(self.up_links_box, map_id,
+                                     extra_tile_rows=tile_links)
         if done and not failed:
             self._info(
                 f"Raster processing complete: {', '.join(done)}. Load it from the "
@@ -1658,14 +2272,31 @@ class MapogDockWidget(QgsDockWidget):
                     sel["gisdata_layer_id"], sel["gisdata_country_id"], map_id)
 
             created_list = created if isinstance(created, list) else _extract_list(created, "data")
-            self._info(f"Added '{sel['name']}' ({len(created_list)} layer(s)). Loading…",
-                       level=Qgis.Success)
-            # Auto-load each created layer into QGIS.
+            self._info(f"Added '{sel['name']}' to the map — loading into QGIS…",
+                       level=Qgis.Info)
+            # Auto-load each created layer into QGIS, tracking outcomes so we can
+            # show one coherent result (a 402 means it's added but loading is gated).
+            loaded, payment_gated = 0, False
             for lyr in created_list:
                 lid = lyr.get("layerid") or lyr.get("id") or lyr.get("layer_id")
                 lname = lyr.get("layer_name") or sel["name"]
-                if lid:
-                    self._load_layer_into_qgis(lid, lname)
+                if not lid:
+                    continue
+                status = self._load_layer_into_qgis(lid, lname, announce_payment=False)
+                if status == "ok":
+                    loaded += 1
+                elif status == "payment":
+                    payment_gated = True
+            if payment_gated:
+                # The layer IS in the map; only loading into QGIS needs a plan.
+                self._show_payment_required(
+                    f"'{sel['name']}' was added to your map in MAPOG, but loading "
+                    "it into QGIS requires an active subscription.")
+            elif not loaded:
+                self._info(f"Added '{sel['name']}' to your map.", level=Qgis.Success)
+            # When layers loaded ok, their per-layer "Loaded …" messages suffice.
+            # The layer is now in the map either way — surface the map's share link.
+            self._populate_links_box(self.gd_links_box, map_id)
         except MapogError as e:
             self._info(f"Failed to add GIS Data layer: {e}", level=Qgis.Critical)
         finally:
@@ -1677,7 +2308,8 @@ class MapogDockWidget(QgsDockWidget):
         QApplication.setOverrideCursor(Qt.WaitCursor) if on else QApplication.restoreOverrideCursor()
         for w in (getattr(self, n, None) for n in
                   ("login_btn", "key_btn", "load_btn", "refresh_btn",
-                   "gd_add_btn")):
+                   "gd_add_btn", "su_btn", "fp_btn", "otp_btn",
+                   "otp_resend_btn")):
             if w is not None:
                 w.setEnabled(not on)
         QApplication.processEvents()

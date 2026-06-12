@@ -13,6 +13,11 @@ Auth model
 
 Endpoints (confirmed against the backend):
     POST {base}/user-company/login/                 -> {data:{token, user:{company_id}}}
+    POST {base}/user-company/signup/                 -> {data:{user_id, email}} (emails an OTP)
+    POST {base}/user-company/forget-password/        -> emails a password-reset OTP
+    POST {base}/user-company/verify/                 -> {data:{token, user:{company_id}}}
+                                                        (sets the password via OTP; used for
+                                                         both signup-verify and password reset)
     GET  {base}/v1/external/keys/list/   (JWT)      -> [{name, publishable_key, secret_key}]
     POST {base}/v1/external/keys/create/ (JWT)      -> {publishable_key, secret_key}
     GET  {base}/v1/external/maps/                   (x-api-key)
@@ -96,6 +101,10 @@ class MapogClient:
         self.publishable_key = publishable_key
         self.secret_key = secret_key
         self.session = session or requests.Session()
+        # The signed-in user object from the most recent login/verify (uname,
+        # email, company_id, login_method, …), or None for key-only connects.
+        # The plugin reads this to show a profile without re-fetching.
+        self.profile = None
 
     # ---- credentials state -------------------------------------------------
 
@@ -186,7 +195,73 @@ class MapogClient:
         if not isinstance(data, dict) or not data.get("token"):
             raise MapogAuthError("Login failed: no token returned.")
         company_id = (data.get("user") or {}).get("company_id")
+        self._capture_profile(data, company_id)
         return data["token"], company_id
+
+    def _capture_profile(self, data, company_id):
+        """Stash the response `user` object (login/verify both return one) so the
+        UI can show a profile. company_id is merged in since some responses carry
+        it alongside, not inside, the user object."""
+        user = dict(data.get("user") or {})
+        if company_id is not None and "company_id" not in user:
+            user["company_id"] = company_id
+        self.profile = user or None
+
+    def signup(self, email, uname="", **extra):
+        """POST /user-company/signup/ -> create an account and email a 6-digit
+        verification OTP. The account has NO password at this point; finish it
+        with verify_otp(email, otp, password).
+
+        Returns the response `data` ({user_id, email}). `extra` may carry the
+        optional signup fields the serializer accepts (contact_no, work_role,
+        work_name, looking_for, location).
+        """
+        payload = {"email": email}
+        if uname:
+            payload["uname"] = uname
+        payload.update(extra)
+        resp = self.session.post(
+            self._url("/user-company/signup/"), json=payload, timeout=TIMEOUT,
+        )
+        return self._unwrap(resp)
+
+    def request_password_reset(self, email):
+        """POST /user-company/forget-password/ -> email a password-reset OTP.
+
+        The backend regenerates the user's OTP and mails it; the same /verify/
+        endpoint then sets the new password. Doubles as an OTP resend for an
+        in-progress signup (the user already exists after signup()).
+        """
+        resp = self.session.post(
+            self._url("/user-company/forget-password/"),
+            json={"email": email}, timeout=TIMEOUT,
+        )
+        return self._unwrap(resp)
+
+    def verify_otp(self, email, otp, password):
+        """POST /user-company/verify/ -> set the account password via the
+        emailed OTP and return (jwt, company_id).
+
+        Used to finish BOTH signup and a password reset — the backend sets the
+        password and returns a fresh JWT in the same {token, user:{company_id}}
+        shape as login(), so the caller can bootstrap API keys immediately.
+        """
+        resp = self.session.post(
+            self._url("/user-company/verify/"),
+            json={"email": email, "otp": otp, "password": password},
+            timeout=TIMEOUT,
+        )
+        data = self._unwrap(resp)
+        if not isinstance(data, dict) or not data.get("token"):
+            raise MapogAuthError("Verification failed: no token returned.")
+        company_id = (data.get("user") or {}).get("company_id")
+        self._capture_profile(data, company_id)
+        return data["token"], company_id
+
+    def verify_and_bootstrap(self, email, otp, password):
+        """Convenience: verify the OTP then ensure a key pair. JWT not retained."""
+        jwt, _ = self.verify_otp(email, otp, password)
+        return self.bootstrap_api_key(jwt)
 
     def bootstrap_api_key(self, jwt):
         """Reuse or create the '{KEY_NAME}' key via JWT; store pk_/sk_ on self."""
@@ -229,6 +304,18 @@ class MapogClient:
     def list_maps(self):
         """GET /v1/external/maps/ -> raw `data` (list/dict of the user's maps)."""
         return self._get("/v1/external/maps/")
+
+    def create_map(self, name, description=""):
+        """POST /v1/external/maps/create/ -> create a new map (HMAC-signed).
+
+        Only `map_name` is required; the server fills the rest (blank story,
+        marked temporary if the company has no paid plan). Returns the created
+        map dict, including a base64 `id` and `map_name`.
+        """
+        payload = {"map_name": name}
+        if description:
+            payload["map_desc"] = description
+        return self._signed_post("/v1/external/maps/create/", payload)
 
     def list_layers(self, map_id):
         """GET /v1/external/layers/?map_id=<b64> -> {map_layers:[...], ...}."""

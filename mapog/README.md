@@ -9,6 +9,9 @@ the correct tile-cache invalidation, bbox fan-out, and dump-table backups.
 
 ## How auth works
 
+You can **log in**, **create an account**, **reset a password**, or **sign in
+with Google** — all from the panel's sign-in screen.
+
 1. You log in with your MAPOG email + password (or paste an API key).
 2. The plugin exchanges the login for a JWT, then calls
    `/v1/external/keys/list|create/` to reuse or provision a key named
@@ -17,8 +20,19 @@ the correct tile-cache invalidation, bbox fan-out, and dump-table backups.
    `QgsAuthManager` when a master password is set; otherwise QgsSettings with
    a warning). Subsequent launches reconnect automatically.
 
-**Google / SSO accounts** have no password — use the **"Paste API key"** tab
-(generate a key in the MAPOG dashboard).
+**Create account** (`Create account` link): enter your name + email →
+`/user-company/signup/` emails a 6-digit code → enter the code and choose a
+password → `/user-company/verify/` sets the password and returns a JWT, which
+is then bootstrapped into an API key exactly like a normal login.
+
+**Forgot password** (`Forgot password?` link): enter your email →
+`/user-company/forget-password/` emails a code → the same OTP screen
+(`/user-company/verify/`) sets a new password and connects you. The `Resend
+code` button re-mails the OTP for both flows.
+
+**Google / SSO accounts** have no password — sign in on the MAPOG web app,
+then connect QGIS via the **"Paste API key"** tab (generate a key in
+MAPOG → Settings → API keys).
 
 ## Install (for development)
 
@@ -78,6 +92,16 @@ Done:
   (`MapogClient.update_layer_style`) so the new layer keeps its color instead of
   MAPOG's default blue (`#005bad`). Style copy is best-effort — it won't fail the
   upload. Round-trips with "Add existing layer".
+- **Share & links:** after a successful upload (and when browsing an existing
+  map's layers), a **Share & links** panel shows an **Open in MAPOG** deep link
+  to the map (`{web_origin}/maps/{base64_map_id}`, where `web_origin` is the
+  server URL with a trailing `/api` stripped), with **Copy**/**Open** buttons.
+  Others can open it only if the map is set **Public** in MAPOG. For **raster**
+  layers, the panel also shows the **XYZ tile URL** (`raster_info.tile_url`),
+  which can be added in QGIS via *Layer → Add Layer → XYZ*; for rasters just
+  uploaded, it appears once server-side processing completes.
+  **WMS/WFS is not offered** — MAPOG has no OGC service — and **vector layers
+  have no tile link** in the external API.
 - HMAC-signed per-feature write methods implemented in the client
   (`insert_features`, `update_attributes`, `update_geometry`, `delete_features`).
 

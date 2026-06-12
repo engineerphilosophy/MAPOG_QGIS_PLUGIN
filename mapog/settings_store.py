@@ -39,9 +39,40 @@ def load_config():
 
 def clear_config():
     s = _settings()
-    s.remove("")  # remove everything under the mapog group
+    s.remove("")  # remove everything under the mapog group (incl. profile/*)
     s.endGroup()
     _clear_secret()
+
+
+# ---- non-secret profile (for the Profile tab) -----------------------------
+# The signed-in user object is captured at login/verify and persisted here so
+# the profile survives restarts (where we only restore keys, never re-login).
+# Cleared by clear_config() along with the rest of the group.
+
+_PROFILE_KEYS = ("uname", "email")
+
+
+def save_profile(profile):
+    if not profile:
+        return
+    s = _settings()
+    for k in _PROFILE_KEYS:
+        v = profile.get(k)
+        if v not in (None, ""):
+            s.setValue(f"profile/{k}", str(v))
+    s.endGroup()
+
+
+def load_profile():
+    """Returns a dict of the persisted profile fields (may be empty)."""
+    s = _settings()
+    prof = {}
+    for k in _PROFILE_KEYS:
+        v = s.value(f"profile/{k}", "")
+        if v:
+            prof[k] = v
+    s.endGroup()
+    return prof
 
 
 # ---- secret_key via QgsAuthManager (encrypted) ----------------------------
