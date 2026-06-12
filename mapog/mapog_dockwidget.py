@@ -15,8 +15,8 @@ a QThread worker is a clear next step — see README).
 
 import os
 
-from qgis.PyQt.QtCore import Qt, QTimer, pyqtSignal
-from qgis.PyQt.QtGui import QPalette, QColor, QPixmap
+from qgis.PyQt.QtCore import Qt, QTimer, QUrl, pyqtSignal
+from qgis.PyQt.QtGui import QPalette, QColor, QPixmap, QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
     QPushButton, QListWidget, QListWidgetItem, QStackedWidget, QTabWidget,
@@ -152,6 +152,27 @@ QPushButton#iconBtn {
 }
 QPushButton#iconBtn:hover { background: #EAF1FC; color: #2D6BE0; }
 QPushButton#iconBtn:disabled { background: transparent; color: #C9D4E2; }
+
+/* About tab: a centered hero card with the wordmark, a version badge, the
+   tagline, feature highlights, and pill link buttons. */
+QFrame#aboutHero {
+    background: #F4F8FF; border: 1px solid #E2ECFB; border-radius: 16px;
+}
+QLabel#aboutTitle { font-size: 17px; font-weight: 800; color: #16356B; }
+QLabel#aboutTagline { color: #5B6B80; font-size: 12px; }
+QLabel#versionPill {
+    background: #E5EEFC; color: #2057C4; font-size: 11px; font-weight: 700;
+    border-radius: 11px; padding: 3px 12px;
+}
+QFrame#featureRow { background: transparent; }
+QLabel#featureIcon { font-size: 16px; }
+QLabel#featureText { color: #2B3A4B; font-size: 12px; font-weight: 600; }
+QPushButton#aboutLink {
+    background: #FFFFFF; border: 1px solid #DCE7F8; border-radius: 20px;
+    padding: 9px 16px; color: #2057C4; font-weight: 700; min-height: 20px;
+}
+QPushButton#aboutLink:hover { background: #EAF1FC; border-color: #BBD2F2; color: #16356B; }
+QLabel#aboutFooter { color: #A8B4C2; font-size: 11px; }
 """
 
 
@@ -561,6 +582,12 @@ class MapogDockWidget(QgsDockWidget):
         et.addStretch(1)
         self.menu_tabs.addTab(export_tab, "QGIS → MAPOG")
 
+        # --- Tab 3: About (plugin identity, version, links) ---
+        self.menu_tabs.addTab(self._build_about_tab(), "About")
+
+        # --- Tab 4: Help (getting started + support links) ---
+        self.menu_tabs.addTab(self._build_help_tab(), "Help")
+
         v.addWidget(self.menu_tabs, 1)
 
         # Log out lives at the bottom of the connected view (removed from the
@@ -575,6 +602,162 @@ class MapogDockWidget(QgsDockWidget):
         logout_row.addStretch(1)
         v.addLayout(logout_row)
         return page
+
+    # ---- About / Help tabs -------------------------------------------------
+
+    # Canonical MAPOG links (kept here so the About/Help tabs share one source).
+    HOMEPAGE_URL = "https://mapog.com"
+    REPO_URL = "https://github.com/engineerphilosophy/MAPOG-QGIS-PLUGIN"
+    TRACKER_URL = "https://github.com/engineerphilosophy/MAPOG-QGIS-PLUGIN/issues"
+    SUPPORT_EMAIL = "support@mapog.com"
+
+    @staticmethod
+    def _plugin_version():
+        """Read `version=` from metadata.txt so About stays in sync with the
+        packaged version without a second place to bump. Returns '' on failure."""
+        path = os.path.join(os.path.dirname(__file__), "metadata.txt")
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip().startswith("version="):
+                        return line.split("=", 1)[1].strip()
+        except OSError:
+            pass
+        return ""
+
+    @staticmethod
+    def _open_url(url):
+        QDesktopServices.openUrl(QUrl(url))
+
+    def _link_button(self, text, url, object_name="link"):
+        """A link-style button that opens `url` in the browser (or the mail
+        client for a mailto: URL). `object_name` selects the QSS styling."""
+        btn = QPushButton(text)
+        btn.setObjectName(object_name)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.clicked.connect(lambda: self._open_url(url))
+        return btn
+
+    @staticmethod
+    def _feature_row(emoji, text):
+        """An icon + label row used in the About tab's feature highlights."""
+        frame = QFrame()
+        frame.setObjectName("featureRow")
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(2, 0, 2, 0)
+        row.setSpacing(10)
+        icon = QLabel(emoji)
+        icon.setObjectName("featureIcon")
+        row.addWidget(icon, 0, Qt.AlignVCenter)
+        lbl = QLabel(text)
+        lbl.setObjectName("featureText")
+        lbl.setWordWrap(True)
+        row.addWidget(lbl, 1)
+        return frame
+
+    def _build_about_tab(self):
+        """Plugin identity: a centered hero (logo + version badge), tagline,
+        feature highlights, and pill link buttons."""
+        tab = QWidget()
+        v = QVBoxLayout(tab)
+        v.setContentsMargins(14, 16, 14, 14)
+        v.setSpacing(14)
+
+        # --- Hero: centered wordmark, title, and version badge ---
+        hero = QFrame()
+        hero.setObjectName("aboutHero")
+        hero.setAttribute(Qt.WA_StyledBackground, True)
+        hv = QVBoxLayout(hero)
+        hv.setContentsMargins(16, 20, 16, 20)
+        hv.setSpacing(8)
+
+        logo = QLabel()
+        pix = QPixmap(os.path.join(os.path.dirname(__file__), "logo.png"))
+        if not pix.isNull():
+            scaled = pix.scaledToHeight(72, Qt.SmoothTransformation)
+            scaled.setDevicePixelRatio(2.0)
+            logo.setPixmap(scaled)
+        else:
+            logo.setText("MAPOG")
+            logo.setObjectName("brandTitle")
+        hv.addWidget(logo, 0, Qt.AlignHCenter)
+
+        title = QLabel("MAPOG for QGIS")
+        title.setObjectName("aboutTitle")
+        title.setAlignment(Qt.AlignCenter)
+        hv.addWidget(title)
+
+        version = self._plugin_version()
+        if version:
+            # Wrap the pill in a centered row so its background hugs the text
+            # instead of stretching the full width.
+            pill_row = QHBoxLayout()
+            pill_row.addStretch(1)
+            ver = QLabel(f"Version {version}")
+            ver.setObjectName("versionPill")
+            ver.setAttribute(Qt.WA_StyledBackground, True)
+            pill_row.addWidget(ver)
+            pill_row.addStretch(1)
+            hv.addLayout(pill_row)
+
+        tagline = QLabel("Cloud GIS, connected to your QGIS project.")
+        tagline.setObjectName("aboutTagline")
+        tagline.setAlignment(Qt.AlignCenter)
+        tagline.setWordWrap(True)
+        hv.addWidget(tagline)
+        v.addWidget(hero)
+
+        # --- What you can do (feature highlights) ---
+        features = QGroupBox("What you can do")
+        fv = QVBoxLayout(features)
+        fv.setSpacing(10)
+        fv.addWidget(self._feature_row(
+            "🗺️", "Browse your MAPOG maps and load their layers onto the canvas."))
+        fv.addWidget(self._feature_row(
+            "🌍", "Add country admin boundaries and OSM data to any map."))
+        fv.addWidget(self._feature_row(
+            "⬆️", "Upload QGIS vector and raster layers back to MAPOG."))
+        v.addWidget(features)
+
+        # --- Links (pill buttons) ---
+        links = QGroupBox("Links")
+        lv = QVBoxLayout(links)
+        lv.setSpacing(8)
+        lv.addWidget(self._link_button(
+            "🌐  Visit mapog.com", self.HOMEPAGE_URL, object_name="aboutLink"))
+        lv.addWidget(self._link_button(
+            "⭐  View source on GitHub", self.REPO_URL, object_name="aboutLink"))
+        v.addWidget(links)
+
+        v.addStretch(1)
+        footer = QLabel("© MAPOG · mapog.com")
+        footer.setObjectName("aboutFooter")
+        footer.setAlignment(Qt.AlignCenter)
+        v.addWidget(footer)
+        return tab
+
+    def _build_help_tab(self):
+        """A short welcome banner plus support links."""
+        tab = QWidget()
+        v = QVBoxLayout(tab)
+        v.setContentsMargins(14, 16, 14, 14)
+        v.setSpacing(14)
+
+        v.addWidget(self._banner(
+            "Questions about MAPOG for QGIS? We're here to help — reach out below."))
+
+        support = QGroupBox("Need help?")
+        hv = QVBoxLayout(support)
+        hv.setSpacing(8)
+        hv.addWidget(self._link_button(
+            "✉️  Contact support", f"mailto:{self.SUPPORT_EMAIL}",
+            object_name="aboutLink"))
+        hv.addWidget(self._link_button(
+            "📖  Documentation", self.HOMEPAGE_URL, object_name="aboutLink"))
+        v.addWidget(support)
+
+        v.addStretch(1)
+        return tab
 
     def _build_existing_page(self):
         """Browse a map's existing layers and load one into QGIS."""
