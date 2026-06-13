@@ -1704,10 +1704,51 @@ class MapogDockWidget(QgsDockWidget):
                 it = QListWidgetItem(f"[Raster] {name}")
                 it.setData(Qt.UserRole, lyr)
                 self.layers_list.addItem(it)
+            # Annotation layers are excluded from list_layers, so fetch them
+            # separately and list them as their own selectable item.
+            self._add_annotation_item(map_id)
         except MapogError as e:
             self._info(f"Failed to load layers: {e}", level=Qgis.Critical)
         finally:
             self._busy(False)
+
+    @staticmethod
+    def _flatten_annotation_features(data):
+        """Flatten the annotation endpoint's grouped + global features into one
+        list. Returns [] when the map has no annotation layer."""
+        if not isinstance(data, dict):
+            return []
+        features = list(data.get("features") or [])
+        for grp in data.get("groups") or []:
+            features.extend((grp or {}).get("features") or [])
+        return features
+
+    def _add_annotation_item(self, map_id):
+        """Fetch the map's annotation layer and, if it has features, append it to
+        the layers list as a selectable item.
+
+        Best-effort: any failure is logged and skipped so a missing/empty
+        annotation layer never disrupts the regular layers list."""
+        try:
+            data = self.client.get_annotation_layer(map_id)
+        except MapogError as e:
+            QgsMessageLog.logMessage(
+                f"[annotation] fetch failed for map {map_id}: {e}", "MAPOG", Qgis.Info)
+            return
+        features = self._flatten_annotation_features(data)
+        if not features:
+            return
+        name = "Annotation Layer"
+        marker = {"layer_name": name, "__annotation__": True, "_features": features}
+        it = QListWidgetItem(f"[Annotation] {name}")
+        it.setData(Qt.UserRole, marker)
+        self.layers_list.addItem(it)
+        # Keep self._layers consistent with the listed items.
+        self._layers.append(marker)
+
+    @staticmethod
+    def _is_annotation(lyr):
+        return bool(lyr.get("__annotation__"))
 
     @staticmethod
     def _is_raster(lyr):
@@ -1734,6 +1775,14 @@ class MapogDockWidget(QgsDockWidget):
             return
         lyr = item.data(Qt.UserRole)
         name = lyr.get("layer_name") or lyr.get("name") or "Layer"
+        # Annotation layers are built locally from their GeoJSON features (no export).
+        if self._is_annotation(lyr):
+            try:
+                self._busy(True)
+                self._load_annotation_into_qgis(lyr, name)
+            finally:
+                self._busy(False)
+            return
         # Raster layers load directly from their XYZ tile URL (no export).
         if self._is_raster(lyr):
             try:
@@ -1754,6 +1803,26 @@ class MapogDockWidget(QgsDockWidget):
             self._load_layer_into_qgis(layer_id, name, fmt=fmt)
         finally:
             self._busy(False)
+
+    def _load_annotation_into_qgis(self, lyr, name):
+        """Build QGIS vector layers from a MAPOG annotation layer's features and
+        add them to the project.
+
+        Annotation layers can mix point/line/polygon geometry, which OGR's GeoJSON
+        driver can't hold in one layer, so layer_io splits them into one layer per
+        geometry type. Caller owns the busy cursor. Returns True on success."""
+        try:
+            qgs_layers = layer_io.annotation_features_to_layers(
+                lyr.get("_features") or [], base_name=name)
+            for qgs_layer in qgs_layers:
+                layer_io.add_layer_to_project(qgs_layer)
+            self._info(
+                f"Loaded '{name}' into QGIS ({len(qgs_layers)} layer(s)).",
+                level=Qgis.Success)
+            return True
+        except ValueError as e:
+            self._info(str(e), level=Qgis.Critical)
+        return False
 
     def _load_raster_into_qgis(self, lyr, name):
         """Load a MAPOG raster layer into QGIS from its tile-URL template.

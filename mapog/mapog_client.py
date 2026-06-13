@@ -321,6 +321,21 @@ class MapogClient:
         """GET /v1/external/layers/?map_id=<b64> -> {map_layers:[...], ...}."""
         return self._get("/v1/external/layers/", params={"map_id": encode_id(map_id)})
 
+    def get_annotation_layer(self, map_id):
+        """GET /v1/external/layers/annotation/?map_id=<b64> -> annotation layer.
+
+        Annotation layers are excluded from list_layers, so they have their own
+        endpoint. Returns the response `data` dict, e.g.
+            {"layer_id": "NDU2", "groups": [{"group_name": .., "features": [..]}],
+             "features": [..global..], "count": N, "bbox": "{...}"}
+        When the map has no annotation layer the server returns
+            {"message": "No annotation layer found for this map", "features": []}
+        (so the caller should treat an empty `features`/`groups` as "none").
+        """
+        return self._get(
+            "/v1/external/layers/annotation/", params={"map_id": encode_id(map_id)}
+        )
+
     def request_layer_export(self, layer_id, output_extension="geojson", output_crs=4326):
         """
         POST /v1/external/layers/export/ -> returns a presigned S3 download URL

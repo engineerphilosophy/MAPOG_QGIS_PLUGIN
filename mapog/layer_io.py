@@ -7,6 +7,7 @@ text file. We download the zip, extract it to a temp dir, find the first
 loadable vector file, and load it via the OGR provider.
 """
 
+import json
 import os
 import tempfile
 import zipfile
@@ -76,6 +77,123 @@ def _find_vector_file(root):
     pref = {".geojson": 0, ".json": 0, ".gpkg": 1, ".shp": 2}
     candidates.sort(key=lambda p: pref.get(os.path.splitext(p)[1].lower(), 9))
     return candidates[0]
+
+
+def _coerce_properties(raw):
+    """
+    Coerce a feature's `properties` into a plain dict for GeoJSON output.
+
+    MAPOG annotation properties are stored as jsonb but can arrive over the API
+    as a JSON-encoded *string* (so `dict(raw)` would raise "dictionary update
+    sequence element #0 has length 1; 2 is required"). Handle every shape:
+    dict → copy; JSON string of an object → parse; anything else → wrap under a
+    single key so no data is lost and the load never crashes.
+    """
+    if isinstance(raw, dict):
+        return dict(raw)
+    if raw is None or raw == "":
+        return {}
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return {"properties": raw}
+        return dict(parsed) if isinstance(parsed, dict) else {"properties": parsed}
+    # Lists, numbers, etc. — keep the value rather than dropping it.
+    return {"properties": raw}
+
+
+# GeoJSON geometry type -> (bucket key, human label). One QGIS vector layer is
+# built per bucket because OGR's GeoJSON driver fixes a layer's geometry type
+# from the FIRST feature and drops geometries of other types — so a mixed
+# point/line/polygon FeatureCollection would silently lose everything but the
+# first type. Splitting keeps every geometry and lets each get proper styling.
+_GEOM_BUCKET = {
+    "Point": ("points", "Points"),
+    "MultiPoint": ("points", "Points"),
+    "LineString": ("lines", "Lines"),
+    "MultiLineString": ("lines", "Lines"),
+    "Polygon": ("polygons", "Polygons"),
+    "MultiPolygon": ("polygons", "Polygons"),
+}
+
+# Annotation properties.geometryType values that are NOT drawable map geometry —
+# e.g. the env_settings feature is a per-map config blob stored as a stray point.
+_SKIP_ANNOTATION_TYPES = {"env_settings"}
+
+
+def annotation_features_to_layers(features, base_name="Annotation"):
+    """
+    Build one QgsVectorLayer per geometry class (Points / Lines / Polygons) from
+    inline MAPOG annotation GeoJSON features, returned in stable order.
+
+    Annotation features come from the annotation endpoint as
+    {id, type, geometry, properties, group_name}. We split by geometry type
+    (see _GEOM_BUCKET), fold `group_name` into properties, drop non-drawable
+    pseudo-features (see _SKIP_ANNOTATION_TYPES) and anything without geometry,
+    write one temp .geojson per bucket, and load each via OGR.
+
+    Returns a list of QgsVectorLayer (one per non-empty bucket). Raises
+    ValueError if nothing renderable remains.
+    """
+    buckets = {}  # key -> {"label": str, "features": [...]}
+    skipped_no_geom = 0
+    skipped_pseudo = 0
+    for f in features or []:
+        geom = f.get("geometry")
+        gtype = geom.get("type") if isinstance(geom, dict) else None
+        if not gtype:
+            skipped_no_geom += 1
+            continue
+        bucket = _GEOM_BUCKET.get(gtype)
+        if bucket is None:
+            print(f"[MAPOG][annotation] skipping unsupported geometry type {gtype!r}")
+            continue
+        props = _coerce_properties(f.get("properties"))
+        if props.get("geometryType") in _SKIP_ANNOTATION_TYPES:
+            skipped_pseudo += 1
+            continue
+        if f.get("group_name") and "group_name" not in props:
+            props["group_name"] = f.get("group_name")
+        key, label = bucket
+        buckets.setdefault(key, {"label": label, "features": []})["features"].append({
+            "type": "Feature",
+            "id": f.get("id"),
+            "geometry": geom,
+            "properties": props,
+        })
+
+    kept = sum(len(b["features"]) for b in buckets.values())
+    print(f"[MAPOG][annotation] annotation_features_to_layers: kept {kept} features "
+          f"in {len(buckets)} bucket(s) {[k for k in buckets]}, "
+          f"skipped {skipped_no_geom} without geometry, {skipped_pseudo} pseudo-features")
+    if not buckets:
+        raise ValueError("The annotation layer has no drawable geometry to load.")
+
+    tmp_dir = tempfile.mkdtemp(prefix="mapog_annotation_")
+    layers = []
+    # Stable order: polygons (bottom) -> lines -> points (top) reads best on a map.
+    for key in ("polygons", "lines", "points"):
+        bucket = buckets.get(key)
+        if not bucket:
+            continue
+        layer_name = f"{base_name} – {bucket['label']}"
+        out_path = os.path.join(tmp_dir, f"{key}.geojson")
+        # MAPOG stores annotation geometry in EPSG:4326; tag the CRS so QGIS doesn't prompt.
+        collection = {
+            "type": "FeatureCollection",
+            "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}},
+            "features": bucket["features"],
+        }
+        with open(out_path, "w", encoding="utf-8") as fh:
+            json.dump(collection, fh)
+        layer = QgsVectorLayer(out_path, layer_name, "ogr")
+        print(f"[MAPOG][annotation] built '{layer_name}': isValid={layer.isValid()} "
+              f"features={len(bucket['features'])} -> {out_path}")
+        if not layer.isValid():
+            raise ValueError(f"Could not load annotation layer '{layer_name}'.")
+        layers.append(layer)
+    return layers
 
 
 def xyz_url_to_raster_layer(tile_url, layer_name, zmin=0, zmax=22):
