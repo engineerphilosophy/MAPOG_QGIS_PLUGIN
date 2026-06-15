@@ -14,6 +14,7 @@ a QThread worker is a clear next step — see README).
 """
 
 import os
+import re
 
 from qgis.PyQt.QtCore import Qt, QTimer, QUrl, pyqtSignal
 from qgis.PyQt.QtGui import QPalette, QColor, QPixmap, QDesktopServices
@@ -816,11 +817,37 @@ class MapogDockWidget(QgsDockWidget):
             base = base[:-len("/api")]
         return base or "https://story.mapog.com"
 
-    def _map_share_url(self, map_id):
-        """Deep link that opens this map in the MAPOG web app. The map id is sent
-        base64-encoded (encode_id is idempotent, so already-encoded ids pass
-        through). Viewable by others only if the map is set Public in MAPOG."""
-        return f"{self._web_app_url()}/maps/{encode_id(map_id)}"
+    @staticmethod
+    def _slugify(name):
+        """Turn a map name into a URL slug: lowercase, runs of non-alphanumeric
+        characters collapsed to a single hyphen, ends trimmed
+        (e.g. "Visualize Population Data" -> "visualize-population-data").
+        Falls back to "map" for an empty / symbol-only name."""
+        slug = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+        return slug or "map"
+
+    def _map_name_for_id(self, map_id):
+        """Find a map's name among the cached maps (self._maps), matching on the
+        base64-normalized id. Returns '' when the map isn't in the cache."""
+        target = encode_id(map_id)
+        for m in self._maps or []:
+            mid = m.get("id") or m.get("mapid") or m.get("map_id")
+            if mid is not None and encode_id(mid) == target:
+                return self._map_title(m)
+        return ""
+
+    def _map_share_url(self, map_id, map_name=None):
+        """Public shareable link that opens this map in the MAPOG web app, of the
+        form  {web_app}/public/{name-slug}/{base64-id}  (e.g.
+        https://teststory.mapog.com/public/visualize-population-data/NjU3NQ==).
+
+        The map id is base64-encoded (encode_id is idempotent, so already-encoded
+        ids pass through). `map_name` builds the slug; when omitted it's looked up
+        from the cached maps list. Viewable by others only if the map is set
+        Public in MAPOG."""
+        if map_name is None:
+            map_name = self._map_name_for_id(map_id)
+        return f"{self._web_app_url()}/public/{self._slugify(map_name)}/{encode_id(map_id)}"
 
     def _pricing_url(self):
         """MAPOG pricing/subscription page (tracks the configured server, e.g.
@@ -885,11 +912,12 @@ class MapogDockWidget(QgsDockWidget):
         return box
 
     def _populate_links_box(self, box, map_id, raster_tile_url=None,
-                            extra_tile_rows=None):
-        """(Re)fill a links box: always the map deep link; a raster XYZ tile row
+                            extra_tile_rows=None, map_name=None):
+        """(Re)fill a links box: always the public map link; a raster XYZ tile row
         when a tile_url is available; otherwise a note that WMS/WFS and vector
-        tile links aren't offered. `extra_tile_rows` is an optional list of
-        (label, url) for multiple completed rasters."""
+        tile links aren't offered. `map_name` builds the share-link slug (looked
+        up from the cached maps when omitted). `extra_tile_rows` is an optional
+        list of (label, url) for multiple completed rasters."""
         layout = box.layout()
         while layout.count():
             item = layout.takeAt(0)
@@ -901,9 +929,9 @@ class MapogDockWidget(QgsDockWidget):
 
         if map_id is not None:
             layout.addLayout(self._link_row(
-                "Open in MAPOG (map link)", self._map_share_url(map_id)))
-            hint = QLabel("Anyone can open the map link only if the map is set to "
-                          "Public in MAPOG.")
+                "Public map link", self._map_share_url(map_id, map_name)))
+            hint = QLabel("Anyone can open the public map link only if the map is "
+                          "set to Public in MAPOG.")
             hint.setObjectName("hint")
             hint.setWordWrap(True)
             layout.addWidget(hint)
@@ -1683,10 +1711,11 @@ class MapogDockWidget(QgsDockWidget):
         m = item.data(Qt.UserRole)
         map_id = m.get("id") or m.get("mapid") or m.get("map_id")
         self._ex_map_id = map_id
+        self._ex_map_name = self._map_title(m)
         # Step 1 is done — light up step 2 ("Pick a layer").
         self._set_step2_active(True)
-        # Show the map's deep link now; a raster selection adds its tile link.
-        self._populate_links_box(self.ex_links_box, map_id)
+        # Show the map's public link now; a raster selection adds its tile link.
+        self._populate_links_box(self.ex_links_box, map_id, map_name=self._ex_map_name)
         try:
             self._busy(True)
             data = self.client.list_layers(map_id)
@@ -1766,7 +1795,9 @@ class MapogDockWidget(QgsDockWidget):
             lyr = item.data(Qt.UserRole)
             if self._is_raster(lyr):
                 tile_url = self._raster_tile_url(lyr)
-        self._populate_links_box(self.ex_links_box, map_id, raster_tile_url=tile_url)
+        self._populate_links_box(
+            self.ex_links_box, map_id, raster_tile_url=tile_url,
+            map_name=getattr(self, "_ex_map_name", None))
 
     def _on_load_layer(self):
         item = self.layers_list.currentItem()
@@ -2055,10 +2086,14 @@ class MapogDockWidget(QgsDockWidget):
             # Surface share/links for the target map once anything uploaded.
             # Raster tile URLs are added later by the processing watcher.
             if uploaded:
-                self._populate_links_box(self.up_links_box, map_id)
+                self._populate_links_box(
+                    self.up_links_box, map_id,
+                    map_name=self.up_map_combo.currentText())
             # Show a persistent loader until server-side raster processing ends.
             if pending_rasters:
-                self._start_raster_watch(map_id, pending_rasters)
+                self._start_raster_watch(
+                    map_id, pending_rasters,
+                    map_name=self.up_map_combo.currentText())
             # If nothing uploaded, the per-layer error(s) above already explain why.
         finally:
             self._busy(False)
@@ -2094,7 +2129,7 @@ class MapogDockWidget(QgsDockWidget):
     _RASTER_POLL_MS = 3000        # poll interval
     _RASTER_POLL_MAX_TICKS = 200  # give up after ~10 min (3s × 200)
 
-    def _start_raster_watch(self, map_id, rasters):
+    def _start_raster_watch(self, map_id, rasters, map_name=None):
         """Show a persistent message-bar loader and poll MAPOG until every
         freshly uploaded raster finishes (or fails) server-side processing."""
         self._stop_raster_watch()  # only one watch at a time
@@ -2113,6 +2148,7 @@ class MapogDockWidget(QgsDockWidget):
 
         self._raster_watch = {
             "map_id": map_id,
+            "map_name": map_name,
             "pending": list(rasters),
             "done": [],
             "failed": [],
@@ -2201,12 +2237,14 @@ class MapogDockWidget(QgsDockWidget):
             return
         done, failed = list(w["done"]), list(w["failed"])
         map_id, tile_links = w["map_id"], list(w["tile_links"])
+        map_name = w.get("map_name")
         self._stop_raster_watch()
         # Add the completed rasters' XYZ tile links to the upload page's box
-        # (alongside the map deep link populated right after upload).
+        # (alongside the public map link populated right after upload).
         if tile_links and getattr(self, "up_links_box", None) is not None:
             self._populate_links_box(self.up_links_box, map_id,
-                                     extra_tile_rows=tile_links)
+                                     extra_tile_rows=tile_links,
+                                     map_name=map_name)
         if done and not failed:
             self._info(
                 f"Raster processing complete: {', '.join(done)}. Load it from the "
@@ -2365,7 +2403,8 @@ class MapogDockWidget(QgsDockWidget):
                 self._info(f"Added '{sel['name']}' to your map.", level=Qgis.Success)
             # When layers loaded ok, their per-layer "Loaded …" messages suffice.
             # The layer is now in the map either way — surface the map's share link.
-            self._populate_links_box(self.gd_links_box, map_id)
+            self._populate_links_box(self.gd_links_box, map_id,
+                                     map_name=self.gd_map_combo.currentText())
         except MapogError as e:
             self._info(f"Failed to add GIS Data layer: {e}", level=Qgis.Critical)
         finally:

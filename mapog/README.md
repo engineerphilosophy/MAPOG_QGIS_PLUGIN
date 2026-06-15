@@ -93,10 +93,13 @@ Done:
   MAPOG's default blue (`#005bad`). Style copy is best-effort — it won't fail the
   upload. Round-trips with "Add existing layer".
 - **Share & links:** after a successful upload (and when browsing an existing
-  map's layers), a **Share & links** panel shows an **Open in MAPOG** deep link
-  to the map (`{web_origin}/maps/{base64_map_id}`, where `web_origin` is the
-  server URL with a trailing `/api` stripped), with **Copy**/**Open** buttons.
-  Others can open it only if the map is set **Public** in MAPOG. For **raster**
+  map's layers), a **Share & links** panel shows a **Public map link**
+  (`{web_origin}/public/{map-name-slug}/{base64_map_id}`, e.g.
+  `https://teststory.mapog.com/public/visualize-population-data/NjU3NQ==`, where
+  `web_origin` is the server URL with a trailing `/api` stripped and the slug is
+  the map name lowercased with non-alphanumeric runs collapsed to hyphens), with
+  **Copy**/**Open** buttons. Others can open it only if the map is set **Public**
+  in MAPOG. For **raster**
   layers, the panel also shows the **XYZ tile URL** (`raster_info.tile_url`),
   which can be added in QGIS via *Layer → Add Layer → XYZ*; for rasters just
   uploaded, it appears once server-side processing completes.
