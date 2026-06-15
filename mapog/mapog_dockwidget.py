@@ -836,6 +836,19 @@ class MapogDockWidget(QgsDockWidget):
                 return self._map_title(m)
         return ""
 
+    def _map_share_status_for_id(self, map_id):
+        """Find a map's share_status among the cached maps (self._maps), matching
+        on the base64-normalized id. Returns the upper-cased status string
+        (e.g. 'PUBLIC', 'PROTECTED', 'PRIVATE'); a missing/blank status is
+        treated as 'PRIVATE' (the server's own default). Returns '' only when the
+        map isn't in the cache at all."""
+        target = encode_id(map_id)
+        for m in self._maps or []:
+            mid = m.get("id") or m.get("mapid") or m.get("map_id")
+            if mid is not None and encode_id(mid) == target:
+                return (m.get("share_status") or "PRIVATE").strip().upper()
+        return ""
+
     def _map_share_url(self, map_id, map_name=None):
         """Public shareable link that opens this map in the MAPOG web app, of the
         form  {web_app}/public/{name-slug}/{base64-id}  (e.g.
@@ -918,6 +931,12 @@ class MapogDockWidget(QgsDockWidget):
         tile links aren't offered. `map_name` builds the share-link slug (looked
         up from the cached maps when omitted). `extra_tile_rows` is an optional
         list of (label, url) for multiple completed rasters."""
+        # Remember how this box was filled so a share-status toggle can rebuild
+        # it identically (keeping any raster tile rows) without the caller.
+        box._mapog_links_args = dict(
+            map_id=map_id, raster_tile_url=raster_tile_url,
+            extra_tile_rows=extra_tile_rows, map_name=map_name)
+
         layout = box.layout()
         while layout.count():
             item = layout.takeAt(0)
@@ -928,13 +947,37 @@ class MapogDockWidget(QgsDockWidget):
                 self._clear_layout(item.layout())
 
         if map_id is not None:
-            layout.addLayout(self._link_row(
-                "Public map link", self._map_share_url(map_id, map_name)))
-            hint = QLabel("Anyone can open the public map link only if the map is "
-                          "set to Public in MAPOG.")
-            hint.setObjectName("hint")
-            hint.setWordWrap(True)
-            layout.addWidget(hint)
+            status = self._map_share_status_for_id(map_id)
+            if status == "PUBLIC":
+                layout.addLayout(self._link_row(
+                    "Public map link", self._map_share_url(map_id, map_name)))
+                hint = QLabel("Anyone can open this public map link.")
+                hint.setObjectName("hint")
+                hint.setWordWrap(True)
+                layout.addWidget(hint)
+                # Let the user revoke public access from QGIS.
+                btn = QPushButton("Make private")
+                btn.setCursor(Qt.PointingHandCursor)
+                btn.clicked.connect(
+                    lambda _=False, b=box, mid=map_id: self._toggle_map_share(b, mid, False))
+                layout.addWidget(btn, 0, Qt.AlignLeft)
+            else:
+                # PRIVATE / PROTECTED (or unknown) — don't expose a link that
+                # would 404 / deny access; offer to make it public right here.
+                title = QLabel("Public map link")
+                title.setObjectName("sectionLabel")
+                layout.addWidget(title)
+                hint = QLabel("This map is private, so it has no public link. "
+                              "Make it public to share it with anyone.")
+                hint.setObjectName("hint")
+                hint.setWordWrap(True)
+                layout.addWidget(hint)
+                btn = QPushButton("Make public & get link")
+                btn.setObjectName("primary")
+                btn.setCursor(Qt.PointingHandCursor)
+                btn.clicked.connect(
+                    lambda _=False, b=box, mid=map_id: self._toggle_map_share(b, mid, True))
+                layout.addWidget(btn, 0, Qt.AlignLeft)
 
         tile_rows = list(extra_tile_rows or [])
         if raster_tile_url:
@@ -951,6 +994,42 @@ class MapogDockWidget(QgsDockWidget):
             layout.addWidget(note)
 
         box.setVisible(True)
+
+    def _set_cached_share_status(self, map_id, status):
+        """Update self._maps so the next _map_share_status_for_id() reflects a
+        just-changed share status (the cache is otherwise only refreshed on a
+        full maps reload). Inserts a minimal stub if the map isn't cached yet
+        (e.g. a map created during this upload session)."""
+        target = encode_id(map_id)
+        for m in self._maps or []:
+            mid = m.get("id") or m.get("mapid") or m.get("map_id")
+            if mid is not None and encode_id(mid) == target:
+                m["share_status"] = status
+                return
+        if self._maps is None:
+            self._maps = []
+        self._maps.append({"id": encode_id(map_id), "share_status": status})
+
+    def _toggle_map_share(self, box, map_id, make_public):
+        """Flip a map between PUBLIC and PRIVATE via the external API, then rebuild
+        the same links box so the link (or the private notice) updates in place."""
+        if not self.client:
+            return
+        try:
+            self._busy(True)
+            self.client.set_map_share_status(map_id, make_public)
+        except Exception as e:
+            self._info(f"Could not update map visibility: {e}", level=Qgis.Warning)
+            return
+        finally:
+            self._busy(False)
+
+        self._set_cached_share_status(map_id, "PUBLIC" if make_public else "PRIVATE")
+        self._info("Map is now public — share link ready." if make_public
+                   else "Map is now private.", level=Qgis.Success)
+        # Rebuild this box exactly as it was last populated (preserves tile rows).
+        args = getattr(box, "_mapog_links_args", None) or {"map_id": map_id}
+        self._populate_links_box(box, **args)
 
     @staticmethod
     def _clear_layout(layout):

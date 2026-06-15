@@ -317,6 +317,24 @@ class MapogClient:
             payload["map_desc"] = description
         return self._signed_post("/v1/external/maps/create/", payload)
 
+    def set_map_share_status(self, map_id, public):
+        """POST /v1/external/maps/share-status/ -> set the map PUBLIC or PRIVATE
+        (HMAC-signed). `public` is a bool. A PUBLIC map can be opened by anyone
+        via its public link; PRIVATE hides it. Returns the updated map dict
+        (carrying the new `share_status`)."""
+        payload = {
+            "map_id": encode_id(map_id),
+            "share_status": "PUBLIC" if public else "PRIVATE",
+        }
+        if public:
+            # Mirror the server's own default for private maps so making a map
+            # public doesn't blank out the public-viewer tool config.
+            payload["share_map_tools_status"] = {
+                "enable_filter_by_geometry": True,
+                "enable_tool_box": True,
+            }
+        return self._signed_post("/v1/external/maps/share-status/", payload)
+
     def list_layers(self, map_id):
         """GET /v1/external/layers/?map_id=<b64> -> {map_layers:[...], ...}."""
         return self._get("/v1/external/layers/", params={"map_id": encode_id(map_id)})
