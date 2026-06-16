@@ -38,6 +38,11 @@ fi
 sed -i '' -E "s/(<pyqgis_plugin name=\"MAPOG\" version=\")[^\"]*(\")/\1${VERSION}\2/" docs/plugins.xml
 sed -i '' -E "s|<version>[^<]*</version>|<version>${VERSION}</version>|" docs/plugins.xml
 
+# 2b. Stamp today's date as <update_date> so QGIS shows a fresh release date
+# (the upgrade reads as new, not stuck on the original create_date).
+TODAY="$(date +%F)"
+sed -i '' -E "s|<update_date>[^<]*</update_date>|<update_date>${TODAY}</update_date>|" docs/plugins.xml
+
 # 3. Rebuild the downloadable zip (top-level mapog/ dir, no caches).
 rm -f docs/mapog.zip
 zip -rq docs/mapog.zip mapog -x '*.pyc' -x '*/__pycache__/*' -x '*.DS_Store'
@@ -52,5 +57,6 @@ echo
 echo "Release v${VERSION} prepared:"
 grep -E '^version=' mapog/metadata.txt
 grep -E '<version>' docs/plugins.xml
+grep -E '<update_date>' docs/plugins.xml
 echo
 echo "Next:  git commit -m \"Release v${VERSION}\" && git push origin main"

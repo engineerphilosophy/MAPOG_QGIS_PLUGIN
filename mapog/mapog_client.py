@@ -44,6 +44,25 @@ try:
 except ImportError:  # pragma: no cover - requests ships with QGIS' Python
     requests = None
 
+try:  # optional — enables byte-level upload progress when present
+    from requests_toolbelt.multipart.encoder import (
+        MultipartEncoder, MultipartEncoderMonitor,
+    )
+except ImportError:  # pragma: no cover - falls back to a non-byte-progress POST
+    MultipartEncoder = MultipartEncoderMonitor = None
+
+
+# Single switch for all streaming/transfer debug tracing — the [MAPOG][stream]
+# console prints here AND the dockwidget's [stream] Log-panel lines both honor
+# it. Off for releases; flip to True when diagnosing transfer progress. It does
+# NOT affect the visible progress bar, which is driven by the progress callback.
+DEBUG_STREAM = False
+
+
+def _dbg(msg):
+    if DEBUG_STREAM:
+        print(f"[MAPOG][stream] {msg}")
+
 
 KEY_NAME = "QGIS Plugin"
 # Production API base. The server mounts both /user-company/* and /v1/external/*
@@ -181,6 +200,59 @@ class MapogClient:
         except requests.RequestException as e:
             raise MapogError(f"Network error: {e}")
         return self._unwrap(resp)
+
+    def _multipart_post(self, path, fields, headers, progress_cb=None,
+                        timeout=UPLOAD_TIMEOUT):
+        """POST a multipart/form-data body, optionally reporting upload progress.
+
+        `fields` is a list of (name, value) pairs where value is either a string
+        or a (filename, fileobj, content_type) tuple — the shape both requests
+        and requests_toolbelt accept. Multipart requests skip HMAC server-side,
+        so callers pass only x-api-key in `headers`; the multipart Content-Type
+        (carrying the boundary) is set here, never by the caller.
+
+        When requests_toolbelt is installed and `progress_cb` is given, the body
+        is streamed through a MultipartEncoderMonitor so progress_cb(bytes_sent,
+        total) fires as bytes go out. Otherwise it falls back to a plain requests
+        multipart POST (the transfer still happens; there's just no byte-level
+        progress, so the UI keeps an indeterminate bar)."""
+        url = self._url(path)
+        if MultipartEncoder is not None and progress_cb is not None:
+            encoder = MultipartEncoder(fields=fields)
+            total = encoder.len
+            _dbg(f"_multipart_post: STREAMING via MultipartEncoderMonitor, "
+                 f"total={total} bytes -> {path}")
+            last = {"decile": -1}
+
+            def _monitor_cb(m):
+                progress_cb(m.bytes_read, total)
+                decile = int(m.bytes_read * 10 / total) if total else 0
+                if decile != last["decile"]:
+                    last["decile"] = decile
+                    _dbg(f"_multipart_post: sent={m.bytes_read} bytes"
+                         + (f" ({m.bytes_read * 100 // total}%)" if total else ""))
+
+            monitor = MultipartEncoderMonitor(encoder, _monitor_cb)
+            post_headers = dict(headers)
+            post_headers["Content-Type"] = monitor.content_type
+            resp = self.session.post(
+                url, data=monitor, headers=post_headers, timeout=timeout)
+            _dbg(f"_multipart_post: upload done, status={resp.status_code}")
+            return resp
+        # Fallback: let requests build the body (split string fields vs files).
+        _dbg(f"_multipart_post: FALLBACK (no byte progress) -> {path} "
+             f"[toolbelt={'present' if MultipartEncoder else 'MISSING'}, "
+             f"cb={'yes' if progress_cb else 'no'}]")
+        data, files = {}, []
+        for name, value in fields:
+            if isinstance(value, tuple):
+                files.append((name, value))
+            else:
+                data[name] = value
+        resp = self.session.post(
+            url, data=data, files=files, headers=headers, timeout=timeout)
+        _dbg(f"_multipart_post: upload done (fallback), status={resp.status_code}")
+        return resp
 
     # ---- auth / key bootstrap ---------------------------------------------
 
@@ -382,23 +454,58 @@ class MapogClient:
             raise MapogError("Export did not return a download URL.")
         return data
 
-    def download_export(self, download_url):
-        """GET the presigned S3 URL -> raw .zip bytes (no MAPOG auth needed)."""
-        try:
-            resp = self.session.get(download_url, timeout=EXPORT_TIMEOUT)
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            raise MapogError(f"Failed to download exported file: {e}")
-        return resp.content
+    def download_export(self, download_url, progress_cb=None):
+        """GET the presigned S3 URL -> raw .zip bytes (no MAPOG auth needed).
 
-    def export_layer_zip(self, layer_id, output_extension="geojson", output_crs=4326):
-        """Convenience: request export + download the resulting .zip bytes."""
+        Streams the body so a caller can render download progress: when
+        `progress_cb` is given it is called as progress_cb(bytes_received, total)
+        after each chunk, where `total` is the Content-Length in bytes, or None
+        when the server doesn't advertise one (then the UI shows a busy bar).
+        """
+        _dbg(f"download_export: GET stream start cb={'yes' if progress_cb else 'no'} "
+             f"url={download_url[:80]}…")
+        try:
+            resp = self.session.get(download_url, timeout=EXPORT_TIMEOUT, stream=True)
+            resp.raise_for_status()
+            total = int(resp.headers.get("Content-Length") or 0) or None
+            _dbg(f"download_export: status={resp.status_code} total={total} bytes "
+                 f"(Content-Length={resp.headers.get('Content-Length')!r})")
+            received = 0
+            chunks = []
+            last_decile = -1
+            for chunk in resp.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                received += len(chunk)
+                if progress_cb is not None:
+                    progress_cb(received, total)
+                # Throttle the trace to ~every 10% (or every chunk if no total).
+                decile = int(received * 10 / total) if total else last_decile + 1
+                if decile != last_decile:
+                    last_decile = decile
+                    _dbg(f"download_export: received={received} bytes"
+                         + (f" ({received * 100 // total}%)" if total else ""))
+            _dbg(f"download_export: done, {received} bytes in {len(chunks)} chunk(s)")
+            return b"".join(chunks)
+        except requests.RequestException as e:
+            _dbg(f"download_export: FAILED {e}")
+            raise MapogError(f"Failed to download exported file: {e}")
+
+    def export_layer_zip(self, layer_id, output_extension="geojson", output_crs=4326,
+                         progress_cb=None):
+        """Convenience: request export + download the resulting .zip bytes.
+
+        `progress_cb(bytes_received, total)` (optional) is forwarded to
+        download_export to drive a download-progress UI. It fires only during the
+        download phase — the server-side export POST returns nothing until the
+        zip is built, so that phase is reported as an indeterminate (busy) bar."""
         url = self.request_layer_export(layer_id, output_extension, output_crs)
-        return self.download_export(url)
+        return self.download_export(url, progress_cb=progress_cb)
 
     # ---- data: writes ------------------------------------------------------
 
-    def upload_layer(self, map_id, file_paths):
+    def upload_layer(self, map_id, file_paths, progress_cb=None):
         """
         POST /v1/external/layers/upload/ (multipart) -> create a new layer in a map.
 
@@ -407,26 +514,23 @@ class MapogClient:
         sent base64-encoded.
 
         Multipart requests skip HMAC server-side, so only x-api-key is sent — we
-        must NOT set Content-Type here (requests sets the multipart boundary).
+        must NOT set Content-Type here (the multipart boundary is set in
+        _multipart_post). `progress_cb(bytes_sent, total)` (optional) drives an
+        upload-progress UI when requests_toolbelt is available.
         Returns the response `data` (typically {"layers": [...]}).
         """
         if not self.publishable_key:
             raise MapogAuthError("Not authenticated — no API key configured.")
         headers = {"x-api-key": self.publishable_key}
-        files = []
         open_handles = []
         try:
+            fields = [("map_id", encode_id(map_id))]
             for p in file_paths:
                 fh = open(p, "rb")
                 open_handles.append(fh)
-                files.append(("files[]", (os.path.basename(p), fh, "application/octet-stream")))
-            resp = self.session.post(
-                self._url("/v1/external/layers/upload/"),
-                data={"map_id": encode_id(map_id)},
-                files=files,
-                headers=headers,
-                timeout=UPLOAD_TIMEOUT,
-            )
+                fields.append(("files[]", (os.path.basename(p), fh, "application/octet-stream")))
+            resp = self._multipart_post(
+                "/v1/external/layers/upload/", fields, headers, progress_cb=progress_cb)
         except requests.RequestException as e:
             raise MapogError(f"Network error: {e}")
         finally:
@@ -434,7 +538,7 @@ class MapogClient:
                 fh.close()
         return self._unwrap(resp)
 
-    def upload_raster_layer(self, map_id, file_path, name=None):
+    def upload_raster_layer(self, map_id, file_path, name=None, progress_cb=None):
         """
         POST /v1/external/layers/upload-raster/ (multipart) -> create a new
         raster layer in a map from a GeoTIFF/COG file.
@@ -444,8 +548,9 @@ class MapogClient:
         sent base64-encoded; `name` defaults to the file name server-side.
 
         Like the vector upload, multipart requests skip HMAC server-side, so we
-        send only x-api-key and must NOT set Content-Type (requests sets the
-        multipart boundary).
+        send only x-api-key and must NOT set Content-Type (the multipart boundary
+        is set in _multipart_post). `progress_cb(bytes_sent, total)` (optional)
+        drives an upload-progress UI when requests_toolbelt is available.
 
         Ingestion is asynchronous: the response `data` is the new raster layer
         in get-map-layers shape with `raster_info.processing_status == "pending"`
@@ -455,19 +560,14 @@ class MapogClient:
         if not self.publishable_key:
             raise MapogAuthError("Not authenticated — no API key configured.")
         headers = {"x-api-key": self.publishable_key}
-        data = {"map_id": encode_id(map_id)}
+        fields = [("map_id", encode_id(map_id))]
         if name:
-            data["name"] = name
+            fields.append(("name", name))
         fh = open(file_path, "rb")
         try:
-            files = [("file", (os.path.basename(file_path), fh, "application/octet-stream"))]
-            resp = self.session.post(
-                self._url("/v1/external/layers/upload-raster/"),
-                data=data,
-                files=files,
-                headers=headers,
-                timeout=UPLOAD_TIMEOUT,
-            )
+            fields.append(("file", (os.path.basename(file_path), fh, "application/octet-stream")))
+            resp = self._multipart_post(
+                "/v1/external/layers/upload-raster/", fields, headers, progress_cb=progress_cb)
         except requests.RequestException as e:
             raise MapogError(f"Network error: {e}")
         finally:

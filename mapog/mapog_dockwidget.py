@@ -27,7 +27,9 @@ from qgis.PyQt.QtWidgets import (
 from qgis.core import Qgis, QgsProject, QgsVectorLayer, QgsRasterLayer, QgsMessageLog
 from qgis.gui import QgsDockWidget
 
-from .mapog_client import MapogClient, MapogError, MapogAuthError, DEFAULT_BASE_URL, encode_id
+from .mapog_client import (
+    MapogClient, MapogError, MapogAuthError, DEFAULT_BASE_URL, encode_id, DEBUG_STREAM,
+)
 from . import settings_store
 from . import layer_io
 
@@ -1993,10 +1995,14 @@ class MapogDockWidget(QgsDockWidget):
         caller can show one combined message (used by the GIS Data add, where the
         layer IS added to the map even though loading into QGIS is gated).
         """
+        # Export returns a presigned S3 .zip URL; download + unzip + load. The
+        # progress bar is busy during the server-side export, then shows the
+        # download percentage as the zip streams in.
+        item, progress = self._begin_transfer(f"Exporting '{name}' from MAPOG…")
         try:
-            # Export returns a presigned S3 .zip URL; download + unzip + load.
-            self._info(f"Exporting '{name}' — this may take a moment…", level=Qgis.Info)
-            zip_bytes = self.client.export_layer_zip(layer_id, output_extension=fmt)
+            zip_bytes = self.client.export_layer_zip(
+                layer_id, output_extension=fmt,
+                progress_cb=lambda done, total: self._on_transfer_progress(progress, done, total))
             qgs_layer = layer_io.zip_bytes_to_layer(zip_bytes, name)
             layer_io.add_layer_to_project(qgs_layer)
             self._info(f"Loaded '{name}' into QGIS.", level=Qgis.Success)
@@ -2015,6 +2021,8 @@ class MapogDockWidget(QgsDockWidget):
                 self._info(f"Failed to load layer: {e}", level=Qgis.Critical)
         except ValueError as e:
             self._info(str(e), level=Qgis.Critical)
+        finally:
+            self._end_transfer(item)
         return "error"
 
     # ---- Upload (QGIS -> MAPOG) --------------------------------------------
@@ -2112,14 +2120,18 @@ class MapogDockWidget(QgsDockWidget):
                 if not is_raster and not isinstance(layer, QgsVectorLayer):
                     failed.append(name)
                     continue
+                # Busy bar while the local file is prepared, then upload % as the
+                # multipart body streams out (requires requests_toolbelt; without
+                # it the bar stays busy through the upload).
+                item, progress = self._begin_transfer(f"Uploading '{name}' to MAPOG…")
+                up_cb = lambda done, total: self._on_transfer_progress(progress, done, total)
                 try:
-                    self._info(f"Uploading '{name}' to MAPOG — this may take a moment…",
-                               level=Qgis.Info)
                     if is_raster:
                         path = layer_io.raster_layer_to_geotiff(layer, iface=self.iface)
                         # Raster ingestion is async server-side and applies its
                         # own default style, so there's no style to copy back.
-                        res = self.client.upload_raster_layer(map_id, path, name=name)
+                        res = self.client.upload_raster_layer(
+                            map_id, path, name=name, progress_cb=up_cb)
                         info = (res or {}).get("raster_info") or {} if isinstance(res, dict) else {}
                         pending_rasters.append({
                             "layerid": res.get("layerid") if isinstance(res, dict) else None,
@@ -2128,7 +2140,7 @@ class MapogDockWidget(QgsDockWidget):
                         })
                     else:
                         path = layer_io.vector_layer_to_geojson(layer)
-                        result = self.client.upload_layer(map_id, [path])
+                        result = self.client.upload_layer(map_id, [path], progress_cb=up_cb)
                         self._apply_layer_style(result, layer)
                     uploaded.append(name)
                 except MapogError as e:
@@ -2144,6 +2156,8 @@ class MapogDockWidget(QgsDockWidget):
                 except ValueError as e:
                     self._info(f"Failed to upload '{name}': {e}", level=Qgis.Critical)
                     failed.append(name)
+                finally:
+                    self._end_transfer(item)
             # Summary line. Rasters are ingested asynchronously (converted to
             # tiles server-side); a live progress watcher (below) tracks them, so
             # the summary just confirms the upload was accepted.
@@ -2447,9 +2461,15 @@ class MapogDockWidget(QgsDockWidget):
         if not sel.get("gisdata_layer_id"):
             self._info("This catalog item has no id to add.", level=Qgis.Critical)
             return
+        add_item = None
         try:
             self._busy(True)
-            self._info(f"Adding '{sel['name']}' to the map…", level=Qgis.Info)
+            # The server-side clone (add to map) is a single blocking POST with no
+            # streamable body, so this step shows an indeterminate "busy" bar. The
+            # data load that follows (_load_layer_into_qgis) streams its download %.
+            add_item, _ = self._begin_transfer(f"Adding '{sel['name']}' to MAPOG…")
+            self._dbg(f"_on_add_gisdata_layer: clone start kind={sel['kind']} "
+                      f"name={sel['name']!r}")
             if sel["kind"] == "admin":
                 created = self.client.add_gisdata_admin_layer(
                     sel["gisdata_layer_id"], sel["gisdata_country_id"], map_id)
@@ -2458,6 +2478,9 @@ class MapogDockWidget(QgsDockWidget):
                     sel["gisdata_layer_id"], sel["gisdata_country_id"], map_id)
 
             created_list = created if isinstance(created, list) else _extract_list(created, "data")
+            self._dbg(f"_on_add_gisdata_layer: clone done, {len(created_list)} layer(s) created")
+            self._end_transfer(add_item)
+            add_item = None
             self._info(f"Added '{sel['name']}' to the map — loading into QGIS…",
                        level=Qgis.Info)
             # Auto-load each created layer into QGIS, tracking outcomes so we can
@@ -2487,6 +2510,8 @@ class MapogDockWidget(QgsDockWidget):
         except MapogError as e:
             self._info(f"Failed to add GIS Data layer: {e}", level=Qgis.Critical)
         finally:
+            if add_item is not None:
+                self._end_transfer(add_item)
             self._busy(False)
 
     # ---- small helpers -----------------------------------------------------
@@ -2503,3 +2528,60 @@ class MapogDockWidget(QgsDockWidget):
 
     def _info(self, message, level=Qgis.Info):
         self.iface.messageBar().pushMessage("MAPOG", message, level=level, duration=6)
+
+    # ---- transfer progress (streamed download / upload) --------------------
+    # Network runs on the GUI thread (see module docstring), so these pump the
+    # event loop from the progress callback to keep the bar repainting mid-transfer.
+
+    def _dbg(self, msg):
+        """Log a [stream] debug line to the QGIS log panel (Log Messages → MAPOG).
+        Gated by mapog_client.DEBUG_STREAM so one switch silences all transfer
+        tracing; the visible progress bar is unaffected."""
+        if not DEBUG_STREAM:
+            return
+        QgsMessageLog.logMessage(f"[stream] {msg}", "MAPOG", Qgis.Info)
+
+    def _begin_transfer(self, text):
+        """Push a persistent message-bar item carrying a progress bar for a
+        download/upload transfer and return (item, progress). The bar starts
+        indeterminate (busy animation) until the first sized update arrives."""
+        self._dbg(f"_begin_transfer: {text!r}")
+        bar = self.iface.messageBar()
+        progress = QProgressBar()
+        progress.setRange(0, 0)  # busy until a total size is known
+        progress.setTextVisible(True)
+        progress.setMaximumWidth(220)
+        progress._dbg_last_pct = -1  # throttle the per-chunk trace below
+        item = bar.createMessage("MAPOG", text)
+        item.layout().addWidget(progress)
+        bar.pushWidget(item, Qgis.Info)
+        QApplication.processEvents()
+        return item, progress
+
+    def _on_transfer_progress(self, progress, done, total):
+        """progress_cb for streamed download/upload: show a percentage once the
+        total is known, else keep the bar animating. Pumps the event loop so the
+        bar repaints while the (GUI-thread) transfer is in flight."""
+        try:
+            if total:
+                pct = max(0, min(100, int(done * 100 / total)))
+                progress.setRange(0, 100)
+                progress.setValue(pct)
+                # Trace ~every 10% so the log isn't flooded per 64 KB chunk.
+                if pct // 10 != getattr(progress, "_dbg_last_pct", -1) // 10:
+                    progress._dbg_last_pct = pct
+                    self._dbg(f"_on_transfer_progress: {done}/{total} bytes ({pct}%)")
+            else:
+                progress.setRange(0, 0)
+                self._dbg(f"_on_transfer_progress: {done} bytes (total unknown — busy bar)")
+        except RuntimeError:
+            return  # widget already dismissed by the user
+        QApplication.processEvents()
+
+    def _end_transfer(self, item):
+        """Remove a transfer's progress message bar (best-effort)."""
+        self._dbg("_end_transfer: removing progress bar")
+        try:
+            self.iface.messageBar().popWidget(item)
+        except Exception:
+            pass
