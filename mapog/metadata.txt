@@ -13,6 +13,7 @@ changelog=0.9.0 — Live transfer progress: loading a layer (MAPOG → QGIS) str
     0.3.0 — Upload raster layers (QGIS → MAPOG): local files go up losslessly, tile/remote rasters render to GeoTIFF; a live progress bar tracks server-side processing until the tiled layer is ready.
     0.2.0 — Two-direction menu (MAPOG → QGIS / QGIS → MAPOG); refreshed white/blue UI; raster layers load from dynamic tile URL and auto-zoom to footprint.
     0.1.0 — Initial release.
+license=GPL-2.0-or-later
 author=MAPOG
 email=support@mapog.com
 tracker=https://github.com/engineerphilosophy/MAPOG-QGIS-PLUGIN/issues
