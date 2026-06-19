@@ -1,6 +1,7 @@
 [general]
 name=MAPOG
 qgisMinimumVersion=3.22
+qgisMaximumVersion=4.99
 description=Connect QGIS to MAPOG (mapog.com) — browse maps and layers, load them into QGIS, and push edits back through the MAPOG external API.
 about=Official-style client for the MAPOG GIS platform. Log in with your MAPOG account (or paste an API key); the plugin provisions and stores an API key, then reads/writes layer data over the secure external API (API key + HMAC).
 version=0.9.0
