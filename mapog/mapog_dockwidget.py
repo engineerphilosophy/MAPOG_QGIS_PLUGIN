@@ -191,8 +191,8 @@ class ClickableCard(QFrame):
     def __init__(self, emoji, title, subtitle, parent=None):
         super().__init__(parent)
         self.setObjectName("card")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(14, 12, 14, 12)
@@ -200,7 +200,7 @@ class ClickableCard(QFrame):
 
         icon = QLabel(emoji)
         icon.setObjectName("cardIcon")
-        row.addWidget(icon, 0, Qt.AlignVCenter)
+        row.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
 
         col = QVBoxLayout()
         col.setSpacing(2)
@@ -215,10 +215,10 @@ class ClickableCard(QFrame):
 
         chevron = QLabel("›")
         chevron.setObjectName("cardChevron")
-        row.addWidget(chevron, 0, Qt.AlignVCenter)
+        row.addWidget(chevron, 0, Qt.AlignmentFlag.AlignVCenter)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.pos()):
             self.clicked.emit()
         super().mouseReleaseEvent(event)
 
@@ -317,7 +317,7 @@ class MapogDockWidget(QgsDockWidget):
         """White MAPOG header strip (wordmark logo + subtitle) shown above every page."""
         bar = QWidget()
         bar.setObjectName("brandBar")
-        bar.setAttribute(Qt.WA_StyledBackground, True)
+        bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         row = QHBoxLayout(bar)
         row.setContentsMargins(16, 12, 16, 12)
         row.setSpacing(10)
@@ -332,7 +332,7 @@ class MapogDockWidget(QgsDockWidget):
             # Render at 2x and tag the device-pixel-ratio so the wordmark stays
             # crisp on HiDPI/Retina while occupying ~26px of logical height.
             target_h = 26
-            scaled = pix.scaledToHeight(target_h * 2, Qt.SmoothTransformation)
+            scaled = pix.scaledToHeight(target_h * 2, Qt.TransformationMode.SmoothTransformation)
             scaled.setDevicePixelRatio(2.0)
             logo.setPixmap(scaled)
         else:
@@ -380,7 +380,7 @@ class MapogDockWidget(QgsDockWidget):
 
         form_box = QGroupBox("Server")
         form = QFormLayout(form_box)
-        form.setLabelAlignment(Qt.AlignLeft)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         self.base_url_edit = QLineEdit(DEFAULT_BASE_URL)
         self.base_url_edit.setPlaceholderText(DEFAULT_BASE_URL)
         form.addRow("Base URL", self.base_url_edit)
@@ -418,13 +418,13 @@ class MapogDockWidget(QgsDockWidget):
         links_row = QHBoxLayout()
         forgot_link = QPushButton("Forgot password?")
         forgot_link.setObjectName("link")
-        forgot_link.setCursor(Qt.PointingHandCursor)
+        forgot_link.setCursor(Qt.CursorShape.PointingHandCursor)
         forgot_link.clicked.connect(self._open_forgot)
         links_row.addWidget(forgot_link)
         links_row.addStretch(1)
         signup_link = QPushButton("Create account")
         signup_link.setObjectName("link")
-        signup_link.setCursor(Qt.PointingHandCursor)
+        signup_link.setCursor(Qt.CursorShape.PointingHandCursor)
         signup_link.clicked.connect(self._open_signup)
         links_row.addWidget(signup_link)
         login_col.addLayout(links_row)
@@ -551,7 +551,7 @@ class MapogDockWidget(QgsDockWidget):
         resend_row.addStretch(1)
         self.otp_resend_btn = QPushButton("Resend code")
         self.otp_resend_btn.setObjectName("link")
-        self.otp_resend_btn.setCursor(Qt.PointingHandCursor)
+        self.otp_resend_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.otp_resend_btn.clicked.connect(self._on_resend_otp)
         resend_row.addWidget(self.otp_resend_btn)
         outer.addLayout(resend_row)
@@ -589,7 +589,7 @@ class MapogDockWidget(QgsDockWidget):
             back = QPushButton("‹ Back")
             back.setObjectName("link")
             back.setMaximumWidth(70)
-            back.setCursor(Qt.PointingHandCursor)
+            back.setCursor(Qt.CursorShape.PointingHandCursor)
             back.clicked.connect(on_back or self._show_menu)
             row.addWidget(back)
         title_lbl = QLabel(title)
@@ -602,12 +602,12 @@ class MapogDockWidget(QgsDockWidget):
         """A soft light-blue info strip (mirrors the web app's tip banner)."""
         frame = QFrame()
         frame.setObjectName("banner")
-        frame.setAttribute(Qt.WA_StyledBackground, True)
+        frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         row = QHBoxLayout(frame)
         row.setContentsMargins(14, 10, 14, 10)
         row.setSpacing(8)
         icon = QLabel(emoji)
-        row.addWidget(icon, 0, Qt.AlignTop)
+        row.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
         lbl = QLabel(text)
         lbl.setObjectName("bannerText")
         lbl.setWordWrap(True)
@@ -637,7 +637,7 @@ class MapogDockWidget(QgsDockWidget):
         row.setSpacing(6)
         row.addWidget(combo, 1)
         new_btn = QPushButton("+ New map")
-        new_btn.setCursor(Qt.PointingHandCursor)
+        new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         new_btn.clicked.connect(on_create)
         row.addWidget(new_btn)
         box.addLayout(row)
@@ -648,8 +648,8 @@ class MapogDockWidget(QgsDockWidget):
         """A QListWidget bounded to a fixed scroll window: vertical scrollbar
         as needed, no horizontal scrollbar (long item text wraps instead)."""
         lst = QListWidget()
-        lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        lst.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        lst.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        lst.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         lst.setWordWrap(True)
         lst.setMinimumHeight(min_h)
         lst.setMaximumHeight(max_h)
@@ -667,8 +667,8 @@ class MapogDockWidget(QgsDockWidget):
         row.setSpacing(8)
         badge = QLabel(str(number))
         badge.setObjectName("stepBadge")
-        badge.setAttribute(Qt.WA_StyledBackground, True)
-        badge.setAlignment(Qt.AlignCenter)
+        badge.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl = QLabel(title)
         lbl.setObjectName("stepTitle")
         if pending:
@@ -678,8 +678,8 @@ class MapogDockWidget(QgsDockWidget):
             setattr(self, badge_attr, badge)
         if title_attr:
             setattr(self, title_attr, lbl)
-        row.addWidget(badge, 0, Qt.AlignVCenter)
-        row.addWidget(lbl, 0, Qt.AlignVCenter)
+        row.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         row.addStretch(1)
         return row
 
@@ -687,7 +687,7 @@ class MapogDockWidget(QgsDockWidget):
         """A centered downward arrow between step panels, reinforcing the flow."""
         lbl = QLabel("↓")
         lbl.setObjectName("stepConnector")
-        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         return lbl
 
     def _set_step2_active(self, active):
@@ -765,7 +765,7 @@ class MapogDockWidget(QgsDockWidget):
         logout_row.addStretch(1)
         logout_btn = QPushButton("Log out")
         logout_btn.setObjectName("link")
-        logout_btn.setCursor(Qt.PointingHandCursor)
+        logout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         logout_btn.clicked.connect(self._on_logout)
         logout_row.addWidget(logout_btn)
         logout_row.addStretch(1)
@@ -803,7 +803,7 @@ class MapogDockWidget(QgsDockWidget):
         client for a mailto: URL). `object_name` selects the QSS styling."""
         btn = QPushButton(text)
         btn.setObjectName(object_name)
-        btn.setCursor(Qt.PointingHandCursor)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.clicked.connect(lambda: self._open_url(url))
         return btn
 
@@ -880,7 +880,7 @@ class MapogDockWidget(QgsDockWidget):
             bar.clearWidgets()
             item = bar.createMessage("MAPOG", message)
             btn = QPushButton("View plans")
-            btn.setCursor(Qt.PointingHandCursor)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda: self._open_url(url))
             item.layout().addWidget(btn)
             bar.pushWidget(item, Qgis.Warning, 12)
@@ -906,12 +906,12 @@ class MapogDockWidget(QgsDockWidget):
         field.setCursorPosition(0)
         row.addWidget(field, 1)
         copy_btn = QPushButton("Copy")
-        copy_btn.setCursor(Qt.PointingHandCursor)
+        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         copy_btn.clicked.connect(lambda: self._copy_to_clipboard(url))
         row.addWidget(copy_btn)
         open_btn = QPushButton("Open")
         open_btn.setObjectName("primary")
-        open_btn.setCursor(Qt.PointingHandCursor)
+        open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         open_btn.clicked.connect(lambda: self._open_url(url))
         row.addWidget(open_btn)
         box.addLayout(row)
@@ -959,10 +959,10 @@ class MapogDockWidget(QgsDockWidget):
                 layout.addWidget(hint)
                 # Let the user revoke public access from QGIS.
                 btn = QPushButton("Make private")
-                btn.setCursor(Qt.PointingHandCursor)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 btn.clicked.connect(
                     lambda _=False, b=box, mid=map_id: self._toggle_map_share(b, mid, False))
-                layout.addWidget(btn, 0, Qt.AlignLeft)
+                layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignLeft)
             else:
                 # PRIVATE / PROTECTED (or unknown) — don't expose a link that
                 # would 404 / deny access; offer to make it public right here.
@@ -976,10 +976,10 @@ class MapogDockWidget(QgsDockWidget):
                 layout.addWidget(hint)
                 btn = QPushButton("Make public & get link")
                 btn.setObjectName("primary")
-                btn.setCursor(Qt.PointingHandCursor)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 btn.clicked.connect(
                     lambda _=False, b=box, mid=map_id: self._toggle_map_share(b, mid, True))
-                layout.addWidget(btn, 0, Qt.AlignLeft)
+                layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignLeft)
 
         tile_rows = list(extra_tile_rows or [])
         if raster_tile_url:
@@ -1061,7 +1061,7 @@ class MapogDockWidget(QgsDockWidget):
         row.setSpacing(10)
         icon = QLabel(emoji)
         icon.setObjectName("featureIcon")
-        row.addWidget(icon, 0, Qt.AlignVCenter)
+        row.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
         lbl = QLabel(text)
         lbl.setObjectName("featureText")
         lbl.setWordWrap(True)
@@ -1079,7 +1079,7 @@ class MapogDockWidget(QgsDockWidget):
         # --- Hero: centered wordmark, title, and version badge ---
         hero = QFrame()
         hero.setObjectName("aboutHero")
-        hero.setAttribute(Qt.WA_StyledBackground, True)
+        hero.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         hv = QVBoxLayout(hero)
         hv.setContentsMargins(16, 20, 16, 20)
         hv.setSpacing(8)
@@ -1087,17 +1087,17 @@ class MapogDockWidget(QgsDockWidget):
         logo = QLabel()
         pix = QPixmap(os.path.join(os.path.dirname(__file__), "logo.png"))
         if not pix.isNull():
-            scaled = pix.scaledToHeight(72, Qt.SmoothTransformation)
+            scaled = pix.scaledToHeight(72, Qt.TransformationMode.SmoothTransformation)
             scaled.setDevicePixelRatio(2.0)
             logo.setPixmap(scaled)
         else:
             logo.setText("MAPOG")
             logo.setObjectName("brandTitle")
-        hv.addWidget(logo, 0, Qt.AlignHCenter)
+        hv.addWidget(logo, 0, Qt.AlignmentFlag.AlignHCenter)
 
         title = QLabel("MAPOG for QGIS")
         title.setObjectName("aboutTitle")
-        title.setAlignment(Qt.AlignCenter)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hv.addWidget(title)
 
         version = self._plugin_version()
@@ -1108,14 +1108,14 @@ class MapogDockWidget(QgsDockWidget):
             pill_row.addStretch(1)
             ver = QLabel(f"Version {version}")
             ver.setObjectName("versionPill")
-            ver.setAttribute(Qt.WA_StyledBackground, True)
+            ver.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             pill_row.addWidget(ver)
             pill_row.addStretch(1)
             hv.addLayout(pill_row)
 
         tagline = QLabel("Cloud GIS, connected to your QGIS project.")
         tagline.setObjectName("aboutTagline")
-        tagline.setAlignment(Qt.AlignCenter)
+        tagline.setAlignment(Qt.AlignmentFlag.AlignCenter)
         tagline.setWordWrap(True)
         hv.addWidget(tagline)
         v.addWidget(hero)
@@ -1145,7 +1145,7 @@ class MapogDockWidget(QgsDockWidget):
         v.addStretch(1)
         footer = QLabel("© MAPOG · mapog.com")
         footer.setObjectName("aboutFooter")
-        footer.setAlignment(Qt.AlignCenter)
+        footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         v.addWidget(footer)
         return tab
 
@@ -1183,17 +1183,17 @@ class MapogDockWidget(QgsDockWidget):
         # --- Hero: avatar + username ---
         hero = QFrame()
         hero.setObjectName("aboutHero")
-        hero.setAttribute(Qt.WA_StyledBackground, True)
+        hero.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         hv = QVBoxLayout(hero)
         hv.setContentsMargins(16, 18, 16, 18)
         hv.setSpacing(6)
         avatar = QLabel("👤")
         avatar.setObjectName("cardIcon")
-        avatar.setAlignment(Qt.AlignHCenter)
+        avatar.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         hv.addWidget(avatar)
         self.pf_name = QLabel("—")
         self.pf_name.setObjectName("aboutTitle")
-        self.pf_name.setAlignment(Qt.AlignHCenter)
+        self.pf_name.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.pf_name.setWordWrap(True)
         hv.addWidget(self.pf_name)
         v.addWidget(hero)
@@ -1216,7 +1216,7 @@ class MapogDockWidget(QgsDockWidget):
         """A value QLabel the user can select/copy (e.g. their email)."""
         lbl = QLabel(text)
         lbl.setWordWrap(True)
-        lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         return lbl
 
     def _refresh_profile_tab(self):
@@ -1254,7 +1254,7 @@ class MapogDockWidget(QgsDockWidget):
         # pick-a-map → pick-a-layer sequence is obvious without reading the banner.
         maps_panel = QFrame()
         maps_panel.setObjectName("stepPanel")
-        maps_panel.setAttribute(Qt.WA_StyledBackground, True)
+        maps_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         maps_layout = QVBoxLayout(maps_panel)
         maps_layout.setContentsMargins(12, 12, 12, 12)
         maps_layout.setSpacing(8)
@@ -1264,9 +1264,9 @@ class MapogDockWidget(QgsDockWidget):
         self.refresh_btn = QPushButton("↻")
         self.refresh_btn.setObjectName("iconBtn")
         self.refresh_btn.setToolTip("Refresh maps")
-        self.refresh_btn.setCursor(Qt.PointingHandCursor)
+        self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.refresh_btn.clicked.connect(self._load_maps)
-        maps_header.addWidget(self.refresh_btn, 0, Qt.AlignVCenter)
+        maps_header.addWidget(self.refresh_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         maps_layout.addLayout(maps_header)
 
         # Search/filter box for accounts with many maps.
@@ -1285,7 +1285,7 @@ class MapogDockWidget(QgsDockWidget):
 
         layers_panel = QFrame()
         layers_panel.setObjectName("stepPanel")
-        layers_panel.setAttribute(Qt.WA_StyledBackground, True)
+        layers_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layers_layout = QVBoxLayout(layers_panel)
         layers_layout.setContentsMargins(12, 12, 12, 12)
         layers_layout.setSpacing(8)
@@ -1699,7 +1699,7 @@ class MapogDockWidget(QgsDockWidget):
             self.ex_links_box.setVisible(False)
             for m in maps:
                 item = QListWidgetItem(str(self._map_title(m)))
-                item.setData(Qt.UserRole, m)
+                item.setData(Qt.ItemDataRole.UserRole, m)
                 self.maps_list.addItem(item)
             # Keep any active search applied to the freshly loaded items.
             self._filter_maps_list(self.maps_search.text())
@@ -1789,7 +1789,7 @@ class MapogDockWidget(QgsDockWidget):
         item = self.maps_list.currentItem()
         if not item or not self.client:
             return
-        m = item.data(Qt.UserRole)
+        m = item.data(Qt.ItemDataRole.UserRole)
         map_id = m.get("id") or m.get("mapid") or m.get("map_id")
         self._ex_map_id = map_id
         self._ex_map_name = self._map_title(m)
@@ -1807,12 +1807,12 @@ class MapogDockWidget(QgsDockWidget):
             for lyr in vector_layers:
                 name = lyr.get("layer_name") or lyr.get("name") or f"Layer {lyr.get('layerid') or lyr.get('id')}"
                 it = QListWidgetItem(str(name))
-                it.setData(Qt.UserRole, lyr)
+                it.setData(Qt.ItemDataRole.UserRole, lyr)
                 self.layers_list.addItem(it)
             for lyr in raster_layers:
                 name = lyr.get("layer_name") or lyr.get("name") or "Raster"
                 it = QListWidgetItem(f"[Raster] {name}")
-                it.setData(Qt.UserRole, lyr)
+                it.setData(Qt.ItemDataRole.UserRole, lyr)
                 self.layers_list.addItem(it)
             # Annotation layers are excluded from list_layers, so fetch them
             # separately and list them as their own selectable item.
@@ -1851,7 +1851,7 @@ class MapogDockWidget(QgsDockWidget):
         name = "Annotation Layer"
         marker = {"layer_name": name, "__annotation__": True, "_features": features}
         it = QListWidgetItem(f"[Annotation] {name}")
-        it.setData(Qt.UserRole, marker)
+        it.setData(Qt.ItemDataRole.UserRole, marker)
         self.layers_list.addItem(it)
         # Keep self._layers consistent with the listed items.
         self._layers.append(marker)
@@ -1873,7 +1873,7 @@ class MapogDockWidget(QgsDockWidget):
         tile_url = None
         item = self.layers_list.currentItem()
         if item:
-            lyr = item.data(Qt.UserRole)
+            lyr = item.data(Qt.ItemDataRole.UserRole)
             if self._is_raster(lyr):
                 tile_url = self._raster_tile_url(lyr)
         self._populate_links_box(
@@ -1885,7 +1885,7 @@ class MapogDockWidget(QgsDockWidget):
         if not item or not self.client:
             self._info("Select a layer first.", level=Qgis.Warning)
             return
-        lyr = item.data(Qt.UserRole)
+        lyr = item.data(Qt.ItemDataRole.UserRole)
         name = lyr.get("layer_name") or lyr.get("name") or "Layer"
         # Annotation layers are built locally from their GeoJSON features (no export).
         if self._is_annotation(lyr):
@@ -2071,9 +2071,9 @@ class MapogDockWidget(QgsDockWidget):
             else:
                 continue
             it = QListWidgetItem(label)
-            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-            it.setCheckState(Qt.Unchecked)
-            it.setData(Qt.UserRole, layer.id())
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Unchecked)
+            it.setData(Qt.ItemDataRole.UserRole, layer.id())
             self.up_layer_list.addItem(it)
         if self.up_layer_list.count() == 0:
             self._info("No vector or raster layers in the current QGIS project to upload.",
@@ -2081,7 +2081,7 @@ class MapogDockWidget(QgsDockWidget):
 
     def _on_upload_select_all(self, checked):
         """Tick / untick every layer in the upload list."""
-        state = Qt.Checked if checked else Qt.Unchecked
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
         for i in range(self.up_layer_list.count()):
             self.up_layer_list.item(i).setCheckState(state)
 
@@ -2090,8 +2090,8 @@ class MapogDockWidget(QgsDockWidget):
         ids = []
         for i in range(self.up_layer_list.count()):
             it = self.up_layer_list.item(i)
-            if it.checkState() == Qt.Checked:
-                ids.append(it.data(Qt.UserRole))
+            if it.checkState() == Qt.CheckState.Checked:
+                ids.append(it.data(Qt.ItemDataRole.UserRole))
         return ids
 
     def _on_upload_layer(self):
@@ -2419,7 +2419,7 @@ class MapogDockWidget(QgsDockWidget):
                 lvl = a.get("admin_level_name") or f"ADM{a.get('admin_level')}"
                 label = f"[Admin] {lvl} — {a.get('layer_name', '')}".strip(" —")
                 it = QListWidgetItem(label)
-                it.setData(Qt.UserRole, {
+                it.setData(Qt.ItemDataRole.UserRole, {
                     "kind": "admin",
                     "gisdata_layer_id": a.get("gisdata_layer_id") or a.get("id"),
                     "gisdata_country_id": country_id,
@@ -2432,7 +2432,7 @@ class MapogDockWidget(QgsDockWidget):
                 lt = o.get("layer_type") or ""
                 label = f"[OSM] {o.get('layer', '')} ({lt})".strip()
                 it = QListWidgetItem(label)
-                it.setData(Qt.UserRole, {
+                it.setData(Qt.ItemDataRole.UserRole, {
                     "kind": "other",
                     "gisdata_layer_id": o.get("id"),
                     "gisdata_country_id": country_id,
@@ -2456,7 +2456,7 @@ class MapogDockWidget(QgsDockWidget):
         if self.gd_map_combo.count() == 0 or self.gd_map_combo.currentData() is None:
             self._info("Select a target map first.", level=Qgis.Warning)
             return
-        sel = item.data(Qt.UserRole)
+        sel = item.data(Qt.ItemDataRole.UserRole)
         map_id = self.gd_map_combo.currentData()
         if not sel.get("gisdata_layer_id"):
             self._info("This catalog item has no id to add.", level=Qgis.Critical)
@@ -2517,7 +2517,7 @@ class MapogDockWidget(QgsDockWidget):
     # ---- small helpers -----------------------------------------------------
 
     def _busy(self, on):
-        QApplication.setOverrideCursor(Qt.WaitCursor) if on else QApplication.restoreOverrideCursor()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor) if on else QApplication.restoreOverrideCursor()
         for w in (getattr(self, n, None) for n in
                   ("login_btn", "key_btn", "load_btn", "refresh_btn",
                    "gd_add_btn", "su_btn", "fp_btn", "otp_btn",

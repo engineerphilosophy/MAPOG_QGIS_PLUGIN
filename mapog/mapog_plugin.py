@@ -42,7 +42,7 @@ class MapogPlugin:
     def _toggle(self, checked):
         if self.dock is None:
             self.dock = MapogDockWidget(self.iface, self.iface.mainWindow())
-            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock)
+            self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
             self.dock.visibilityChanged.connect(self._on_visibility_changed)
         self.dock.setUserVisible(checked)
 
