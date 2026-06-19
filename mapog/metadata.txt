@@ -4,8 +4,9 @@ qgisMinimumVersion=3.22
 qgisMaximumVersion=4.99
 description=Connect QGIS to MAPOG (mapog.com) — browse maps and layers, load them into QGIS, and push edits back through the MAPOG external API.
 about=Official-style client for the MAPOG GIS platform. Log in with your MAPOG account (or paste an API key); the plugin provisions and stores an API key, then reads/writes layer data over the secure external API (API key + HMAC).
-version=0.9.1
-changelog=0.9.1 — Maintenance re-release (no functional changes).
+version=0.9.2
+changelog=0.9.2 — Bug fixes.
+    0.9.1 — Maintenance re-release (no functional changes).
     0.9.0 — Live transfer progress: loading a layer (MAPOG → QGIS) streams the download with a percentage bar, uploading (QGIS → MAPOG) shows upload progress, and Add GIS layer shows a progress bar while the layer is added and loaded.
     0.8.0 — Make a map public/private right from QGIS: private maps now show a "Make public & get link" button (and public maps a "Make private" button) in Share & links, instead of just a note to do it on mapog.com.
     0.7.0 — Share & links now shows a public map link of the form {web_origin}/public/{map-name-slug}/{base64_map_id} (e.g. /public/visualize-population-data/NjU3NQ==), so a map can be shared with anyone once it's set Public in MAPOG.
