@@ -303,12 +303,12 @@ class MapogDockWidget(QgsDockWidget):
     @staticmethod
     def _apply_light_palette(widget):
         pal = widget.palette()
-        for role in (QPalette.Window, QPalette.Base, QPalette.Button):
+        for role in (QPalette.ColorRole.Window, QPalette.ColorRole.Base, QPalette.ColorRole.Button):
             pal.setColor(role, QColor("#FFFFFF"))
-        for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+        for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
             pal.setColor(role, QColor("#2B3A4B"))
-        pal.setColor(QPalette.Highlight, QColor("#2D6BE0"))
-        pal.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+        pal.setColor(QPalette.ColorRole.Highlight, QColor("#2D6BE0"))
+        pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#FFFFFF"))
         widget.setPalette(pal)
 
     # ---- UI construction ---------------------------------------------------
@@ -402,7 +402,7 @@ class MapogDockWidget(QgsDockWidget):
         self.email_edit.setPlaceholderText("you@example.com")
         self.password_edit = QLineEdit()
         self.password_edit.setPlaceholderText("Your password")
-        self.password_edit.setEchoMode(QLineEdit.Password)
+        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_edit.returnPressed.connect(self._on_login)
         login_form.addRow("Email", self.email_edit)
         login_form.addRow("Password", self.password_edit)
@@ -440,7 +440,7 @@ class MapogDockWidget(QgsDockWidget):
         self.pk_edit.setPlaceholderText("pk_...")
         self.sk_edit = QLineEdit()
         self.sk_edit.setPlaceholderText("sk_...")
-        self.sk_edit.setEchoMode(QLineEdit.Password)
+        self.sk_edit.setEchoMode(QLineEdit.EchoMode.Password)
         key_form.addRow("Publishable key", self.pk_edit)
         key_form.addRow("Secret key", self.sk_edit)
         self.key_btn = QPushButton("Connect with key")
@@ -531,10 +531,10 @@ class MapogDockWidget(QgsDockWidget):
         self.otp_code_edit.setPlaceholderText("6-digit code")
         self.otp_pass_edit = QLineEdit()
         self.otp_pass_edit.setPlaceholderText("At least 6 characters")
-        self.otp_pass_edit.setEchoMode(QLineEdit.Password)
+        self.otp_pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.otp_pass2_edit = QLineEdit()
         self.otp_pass2_edit.setPlaceholderText("Re-enter password")
-        self.otp_pass2_edit.setEchoMode(QLineEdit.Password)
+        self.otp_pass2_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.otp_pass2_edit.returnPressed.connect(self._on_verify_otp)
         form.addRow("Code", self.otp_code_edit)
         form.addRow("New password", self.otp_pass_edit)
